@@ -41,6 +41,10 @@ const mediaBlob = async url => {
 async function unlock() {
   const pass = $("passIn").value;
   $("lockErr").textContent = "";
+  if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
+    $("lockErr").textContent = "✗ 此連線不是 HTTPS — 解密功能無法運作。請改用 https://… （GitHub Pages）網址";
+    return;
+  }
   try {
     KEY = await deriveKey(pass);
     const json = await decFile("data/manifest.enc");
@@ -52,7 +56,10 @@ async function unlock() {
     renderView();
   } catch (e) {
     localStorage.removeItem("ma_pass");                                  // stale/failed → forget
-    $("lockErr").textContent = "密碼錯誤或檔案損壞 ✗";
+    $("lockErr").textContent =
+      e.name === "OperationError" ? "密碼錯誤 ✗" :
+      e instanceof TypeError ? "載入失敗 — 找不到加密檔（檢查網址路徑）" :
+      ("載入失敗：" + (e.message || e));
   }
 }
 async function autoUnlock() {
