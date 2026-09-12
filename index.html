@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>音樂庫</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ═══════════ lock screen ═══════════ -->
+<div id="lock">
+  <div class="lockBox">
+    <div class="lockIcon">🔒</div>
+    <h1>音樂庫</h1>
+    <input type="password" id="passIn" placeholder="passphrase" autocomplete="off">
+    <label id="rememberRow"><input type="checkbox" id="remember"> 在此裝置記住密碼</label>
+    <button id="unlockBtn">解鎖</button>
+    <div id="lockErr"></div>
+  </div>
+</div>
+
+<!-- ═══════════ app ═══════════ -->
+<div id="app" hidden>
+  <header>
+    <input id="searchIn" type="search" placeholder="搜尋 歌名 / 歌手 / 專輯…">
+    <button id="lockBtn2" title="lock">🔒</button>
+  </header>
+
+  <main id="main">
+    <div id="libView"></div>
+    <div id="plView" hidden></div>
+    <div id="histView" hidden></div>
+  </main>
+
+  <nav id="nav">
+    <button data-v="lib" class="on">音庫</button>
+    <button data-v="pl">清單</button>
+    <button data-v="hist">紀錄</button>
+  </nav>
+
+  <!-- now-playing overlay -->
+  <div id="player" hidden>
+    <div class="pHead">
+      <button id="backBtn">‹ 音庫</button>
+      <div class="pTitle"><b id="pName"></b><span id="pArtist"></span></div>
+      <button id="fsBtn2" hidden>⛶</button>
+    </div>
+    <div id="lyricsWrap"><div id="lyrics"></div></div>
+    <div id="pCtl">
+      <div class="chips">
+        <button class="chip" id="keyDown">♭ −1</button>
+        <button class="chip" id="keyLbl">原調</button>
+        <button class="chip" id="keyUp">♯ +1</button>
+        <span class="spdWrap">
+          <input type="range" id="spdBar" min="0" max="7" step="1" value="5">
+          <span id="spdLbl">1×</span>
+        </span>
+        <button class="chip" id="loopBtn">🔁</button>
+      </div>
+      <input type="range" id="bar" min="0" max="1000" value="0">
+      <div class="row">
+        <span id="time">0:00 / 0:00</span>
+        <button id="playBtn">▶</button>
+        <div class="chips">
+          <button class="chip" id="addPlBtn">＋清單</button>
+          <button class="chip" id="syncBtn">同步</button>
+        </div>
+      </div>
+      <div id="syncRow" hidden>
+        <span>歌詞同步</span>
+        <button class="chip" id="lyrMinus">−</button>
+        <span id="lyrOffLbl">+0.00s</span>
+        <button class="chip" id="lyrPlus">+</button>
+        <button class="chip" id="lyrReset">重設</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="st.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
