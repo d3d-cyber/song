@@ -525,7 +525,9 @@ $("aiBtn").onclick = async () => {
   const speed = navigator.gpu ? 1.0 : 0.09;               // rough realtime factors
   const est = Math.max(1, Math.round(cur.dur / speed / 60));
   if (aiCache === cur.id) { playAIResult(); return; }
-  if (!confirm(`AI 伴奏：${navigator.gpu ? "WebGPU" : "WASM(慢)"} 模式，約需 ${est} 分鐘處理。開始？`)) return;
+  if (!confirm(`AI 伴奏：${navigator.gpu ? "WebGPU" : "WASM(慢)"} 模式，約需 ${est} 分鐘處理＋首次下載 172MB 模型。開始？（期間請保持螢幕開啟）`)) return;
+  let wakeLock = null;
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch (e) {}
   btn.textContent = "模型…";
   try {
     if (!window.ort) await new Promise((res, rej) => {
@@ -537,14 +539,33 @@ $("aiBtn").onclick = async () => {
     const { DemucsProcessor, CONSTANTS } = await import("./dwsrc/index.js");
     if (!aiProc) {
       const cache = await caches.open("demucs-model");
-      let modelURL = CONSTANTS.DEFAULT_MODEL_URL;
+      let modelURL;
       const hit = await cache.match("/htdemucs");
       if (hit) modelURL = URL.createObjectURL(await hit.blob());
       else {
-        btn.textContent = "下載模型…";
-        const r = await fetch(CONSTANTS.DEFAULT_MODEL_URL);
-        await cache.put("/htdemucs", r.clone());
-        modelURL = URL.createObjectURL(await r.blob());
+        const urls = [CONSTANTS.DEFAULT_MODEL_URL,
+                      CONSTANTS.DEFAULT_MODEL_URL.replace("huggingface.co", "hf-mirror.com")];
+        let blob = null;
+        for (const u of urls) {
+          try {
+            const r = await fetch(u);
+            if (!r.ok) continue;
+            const total = +(r.headers.get("content-length") || 172000000);
+            const reader = r.body.getReader();
+            const chunks = []; let got = 0;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value); got += value.length;
+              btn.textContent = "模型 " + (got / 1048576).toFixed(0) + "/" + (total / 1048576).toFixed(0) + "MB";
+            }
+            blob = new Blob(chunks);
+            break;
+          } catch (e) { }
+        }
+        if (!blob) throw new Error("模型下載失敗（網絡？）");
+        try { await cache.put("/htdemucs", new Response(blob)); } catch (e) {}
+        modelURL = URL.createObjectURL(blob);
       }
       aiProc = new DemucsProcessor({ ort,
         onProgress: p => btn.textContent = "模型 " + Math.round(p * 100) + "%",
@@ -568,7 +589,10 @@ $("aiBtn").onclick = async () => {
     aiResult = toWav(oL, oR, buf.sampleRate);
     btn.textContent = "🤖 ✓ " + ((performance.now() - t0) / 60000).toFixed(1) + "分";
     playAIResult();
-  } catch (e) { btn.textContent = "🤖 ✗"; setTimeout(() => btn.textContent = "🤖 伴奏", 2000); }
+  } catch (e) {
+    btn.textContent = "🤖 ✗ " + String(e.message || e).slice(0, 18);
+    setTimeout(() => btn.textContent = "🤖 伴奏", 4000);
+  } finally { try { wakeLock && wakeLock.release(); } catch (e) {} }
 };
 let aiResult = null;
 function playAIResult() {
