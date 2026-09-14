@@ -12,6 +12,7 @@ let cur = null, queue = [], lines = [], curLine = -1, seeking = false;
 let key = 0, loopOn = false, playing = false, lyrOff = 0, pendingSeek = 0;
 const SPD = [0.5,0.6,0.7,0.8,0.9,1,1.1,1.2]; let spdIdx = 5;
 let userScrollUntil = 0, renderToken = 0;
+let karaOn = false, karaCtx = null, karaNodes = null;
 const blobCache = {}, coverCache = {};
 const encKeyCache = {};               // "trackId|key" → objectURL (pitch-rendered)
 
@@ -377,6 +378,42 @@ $("spdBar").oninput = e => { spdIdx = +e.target.value;
   audio.playbackRate = SPD[spdIdx];
   const l = $("spdLbl"); l.textContent = SPD[spdIdx]+"×"; l.classList.toggle("hot", SPD[spdIdx] !== 1); };
 $("loopBtn").onclick = () => { loopOn = !loopOn; applyAudioState(); $("loopBtn").classList.toggle("on", loopOn); };
+
+/* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
+   Foreground-only: iOS suspends WebAudio in background. */
+$("karaBtn").onclick = () => {
+  karaOn = !karaOn;
+  $("karaBtn").classList.toggle("on", karaOn);
+  try { localStorage.setItem("ma_kara", karaOn ? "1" : ""); } catch (e) {}
+  applyKaraoke();
+};
+function applyKaraoke() {
+  if (!karaOn) { if (karaNodes) { karaNodes.dry.gain.value = 1; karaNodes.wet.gain.value = 0; } return; }
+  if (!karaNodes) {
+    karaCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = karaCtx.createMediaElementSource(audio);
+    const dry = karaCtx.createGain(), wet = karaCtx.createGain();
+    const split = karaCtx.createChannelSplitter(2);
+    const merge = karaCtx.createChannelMerger(2);
+    const g = v => { const n = karaCtx.createGain(); n.gain.value = v; return n; };
+    // in0 = L + (−R), in1 = (−L) + R  ⇒ center (vocals) cancels, stereo sides kept
+    split.connect(g(1), 0).connect(merge, 0, 0);
+    split.connect(g(-1), 1).connect(merge, 0, 0);
+    split.connect(g(-1), 0).connect(merge, 0, 1);
+    split.connect(g(1), 1).connect(merge, 0, 1);
+    // bass restore: lowpassed (L+R) back into both channels
+    const lp = karaCtx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 140;
+    split.connect(lp, 0); split.connect(lp, 1);
+    lp.connect(merge, 0, 0); lp.connect(merge, 0, 1);
+    src.connect(dry); dry.connect(karaCtx.destination);
+    src.connect(split); merge.connect(wet); wet.connect(karaCtx.destination);
+    karaNodes = { dry, wet };
+  }
+  karaNodes.dry.gain.value = 0; karaNodes.wet.gain.value = 1;
+  if (karaCtx.state === "suspended") karaCtx.resume();
+}
+try { if (localStorage.getItem("ma_kara")) { karaOn = true; $("karaBtn").classList.add("on"); } } catch (e) {}
 $("addPlBtn").onclick = () => cur && pickPlaylist(cur.id);
 
 /* lyrics */
