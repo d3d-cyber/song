@@ -570,16 +570,14 @@ $("aiBtn").onclick = async () => {
       aiProc = new DemucsProcessor({ ort,
         onProgress: p => {
           if (typeof p === "number") {                       // model download
-            $("aiBar").style.setProperty("--x", 0);
-            $("aiBarLbl").textContent = "模型下載 " + Math.round(p * 100) + "%";
-            setBar(p);
+            setBar(p); setLbl("模型下載 " + Math.round(p * 100) + "%");
           } else {                                            // separation segments
             const now = performance.now();
             if (p.currentSegment > 1) {
               segMs = segMs ? (segMs * 0.7 + (now - segT) * 0.3) : (now - segT);
               const remain = Math.max(0, Math.round(segMs * (p.totalSegments - p.currentSegment) / 60000));
-              $("aiBarLbl").textContent = `伴奏處理 ${p.currentSegment}/${p.totalSegments} · 剩約 ${remain} 分`;
-            } else $("aiBarLbl").textContent = `伴奏處理 1/${p.totalSegments}…`;
+              setLbl(`伴奏處理 ${p.currentSegment}/${p.totalSegments} · 剩約 ${remain} 分`);
+            } else setLbl(`伴奏處理 1/${p.totalSegments}…`);
             segT = now;
             setBar(p.progress);
           }
@@ -609,7 +607,7 @@ $("aiBtn").onclick = async () => {
     setTimeout(() => btn.textContent = "🤖 伴奏", 4000);
   } finally {
     try { wakeLock && wakeLock.release(); } catch (e) {}
-    setTimeout(() => { $("aiBarWrap").hidden = true; }, 3000);
+    setTimeout(() => { const w = $("aiBarWrap"); if (w) w.hidden = true; }, 3000);
   }
 };
 let aiResult = null;
@@ -624,14 +622,12 @@ function playAIResult() {
 }
 
 function setBar(f) {
-  $("aiBarWrap").hidden = false;
-  $("aiBar").firstChild?.remove?.();
-  const fill = $("aiBar");
-  fill.style.setProperty("--p", (f * 100).toFixed(1) + "%");
-  fill.querySelectorAll("::before");                 // style hook
-  fill.style.background = "rgba(255,255,255,.15)";
-  fill.innerHTML = `<i style="display:block;height:100%;width:${(f*100).toFixed(1)}%;background:#4ade80;transition:width .3s"></i>`;
+  const wrap = $("aiBarWrap"), fill = $("aiBar"), lbl = $("aiBarLbl");
+  if (!wrap || !fill || !lbl) return;                        // stale-HTML guard
+  wrap.hidden = false;
+  fill.innerHTML = `<i style="display:block;height:100%;width:${(f * 100).toFixed(1)}%;background:#4ade80;transition:width .3s"></i>`;
 }
+function setLbl(t) { const l = $("aiBarLbl"); if (l) l.textContent = t; }
 let segMs = 0, segT = 0;
 
 /* fullscreen */
