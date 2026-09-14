@@ -568,11 +568,26 @@ $("aiBtn").onclick = async () => {
         modelURL = URL.createObjectURL(blob);
       }
       aiProc = new DemucsProcessor({ ort,
-        onProgress: p => btn.textContent = "模型 " + Math.round(p * 100) + "%",
-        onLog: (ph, m) => { if (ph === "separation") btn.textContent = "🤖 " + m.slice(0, 14); } });
+        onProgress: p => {
+          if (typeof p === "number") {                       // model download
+            $("aiBar").style.setProperty("--x", 0);
+            $("aiBarLbl").textContent = "模型下載 " + Math.round(p * 100) + "%";
+            setBar(p);
+          } else {                                            // separation segments
+            const now = performance.now();
+            if (p.currentSegment > 1) {
+              segMs = segMs ? (segMs * 0.7 + (now - segT) * 0.3) : (now - segT);
+              const remain = Math.max(0, Math.round(segMs * (p.totalSegments - p.currentSegment) / 60000));
+              $("aiBarLbl").textContent = `伴奏處理 ${p.currentSegment}/${p.totalSegments} · 剩約 ${remain} 分`;
+            } else $("aiBarLbl").textContent = `伴奏處理 1/${p.totalSegments}…`;
+            segT = now;
+            setBar(p.progress);
+          }
+        },
+        onLog: (ph, m) => { } });
       await aiProc.loadModel(modelURL);
     }
-    btn.textContent = "解碼…";
+    btn.textContent = "解碼…（約10秒）";
     const url = key !== 0 && encKeyCache[`${cur.id}|${key}`] ? encKeyCache[`${cur.id}|${key}`] : await mediaBlob(cur.file);
     const buf = await decode(url);
     const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
@@ -592,7 +607,10 @@ $("aiBtn").onclick = async () => {
   } catch (e) {
     btn.textContent = "🤖 ✗ " + String(e.message || e).slice(0, 18);
     setTimeout(() => btn.textContent = "🤖 伴奏", 4000);
-  } finally { try { wakeLock && wakeLock.release(); } catch (e) {} }
+  } finally {
+    try { wakeLock && wakeLock.release(); } catch (e) {}
+    setTimeout(() => { $("aiBarWrap").hidden = true; }, 3000);
+  }
 };
 let aiResult = null;
 function playAIResult() {
@@ -604,6 +622,17 @@ function playAIResult() {
   pendingSeek = t;
   if (was) audio.play().catch(()=>{});
 }
+
+function setBar(f) {
+  $("aiBarWrap").hidden = false;
+  $("aiBar").firstChild?.remove?.();
+  const fill = $("aiBar");
+  fill.style.setProperty("--p", (f * 100).toFixed(1) + "%");
+  fill.querySelectorAll("::before");                 // style hook
+  fill.style.background = "rgba(255,255,255,.15)";
+  fill.innerHTML = `<i style="display:block;height:100%;width:${(f*100).toFixed(1)}%;background:#4ade80;transition:width .3s"></i>`;
+}
+let segMs = 0, segT = 0;
 
 /* fullscreen */
 if (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen) {

@@ -100,6 +100,12 @@ header { display:flex; gap:8px; padding:12px 16px 8px; flex-shrink:0; }
   border:1px solid rgba(255,255,255,.3); color:rgba(255,255,255,.55); background:transparent;
   cursor:pointer; transition:all .25s; }
 .chip.on { background:#fff; color:#000; border-color:#fff; font-weight:600; }
+#aiBarWrap { margin: 8px 0 2px; }
+#aiBar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.15); overflow: hidden; }
+#aiBar::before { content: "";
+  display: block; height: 100%; width: 0%; background: #4ade80; transition: width .3s; }
+#aiBarLbl { font-size: 12px; color: rgba(255,255,255,.75); text-align: center; margin-top: 4px;
+  font-variant-numeric: tabular-nums; }
 .spdWrap { display:flex; align-items:center; gap:6px; }
 .spdWrap input { width:88px; }
 #spdLbl { font-size:12px; color:rgba(255,255,255,.7); min-width:40px; text-align:center; }
