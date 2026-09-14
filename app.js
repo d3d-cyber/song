@@ -380,12 +380,41 @@ $("spdBar").oninput = e => { spdIdx = +e.target.value;
 $("loopBtn").onclick = () => { loopOn = !loopOn; applyAudioState(); $("loopBtn").classList.toggle("on", loopOn); };
 
 /* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
-   Foreground-only: iOS suspends WebAudio in background. */
+   DESKTOP-ONLY: routing audio through WebAudio breaks iOS background playback,
+   so phones never show it. Desktop also gets an offline ⤓ WAV download. */
+const isDesktop = matchMedia("(pointer: fine)").matches;
+if (isDesktop) { $("karaBtn").hidden = false; $("karaDl").hidden = false; }
+else { try { localStorage.removeItem("ma_kara"); } catch (e) {} karaOn = false; }
 $("karaBtn").onclick = () => {
   karaOn = !karaOn;
   $("karaBtn").classList.toggle("on", karaOn);
   try { localStorage.setItem("ma_kara", karaOn ? "1" : ""); } catch (e) {}
   applyKaraoke();
+};
+$("karaDl").onclick = async () => {
+  if (!cur) return;
+  const btn = $("karaDl"); btn.textContent = "運算中…";
+  try {
+    const url = key !== 0 && encKeyCache[`${cur.id}|${key}`] ? encKeyCache[`${cur.id}|${key}`] : await mediaBlob(cur.file);
+    const buf = await decode(url);
+    const L = buf.getChannelData(0);
+    const R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    const n = L.length, sr = buf.sampleRate;
+    const outL = new Float32Array(n), outR = new Float32Array(n);
+    const a = 1 - Math.exp(-2 * Math.PI * 140 / sr); let y = 0;   // one-pole 140Hz bass restore
+    for (let i = 0; i < n; i++) {
+      const l = L[i], r = R[i];
+      y += a * ((l + r) - y);
+      outL[i] = l - r + y; outR[i] = r - l + y;
+    }
+    const wav = toWav(outL, outR, sr);
+    const aEl = document.createElement("a");
+    aEl.href = wav;
+    aEl.download = cur.title.replace(/[\\/:*?"<>|]/g, "_") + " (伴奏).wav";
+    aEl.click();
+    btn.textContent = "⤓ 伴奏 ✓";
+  } catch (e) { btn.textContent = "✗ 失敗"; }
+  setTimeout(() => btn.textContent = "⤓ 伴奏", 2500);
 };
 function applyKaraoke() {
   if (!karaOn) { if (karaNodes) { karaNodes.dry.gain.value = 1; karaNodes.wet.gain.value = 0; } return; }
@@ -413,7 +442,7 @@ function applyKaraoke() {
   karaNodes.dry.gain.value = 0; karaNodes.wet.gain.value = 1;
   if (karaCtx.state === "suspended") karaCtx.resume();
 }
-try { if (localStorage.getItem("ma_kara")) { karaOn = true; $("karaBtn").classList.add("on"); } } catch (e) {}
+try { if (isDesktop && localStorage.getItem("ma_kara")) { karaOn = true; $("karaBtn").classList.add("on"); } } catch (e) {}
 $("addPlBtn").onclick = () => cur && pickPlaylist(cur.id);
 
 /* lyrics */
