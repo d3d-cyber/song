@@ -439,6 +439,54 @@ function mediaSession(t) {
   } catch (e) {}
 }
 
+/* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
+   On phones, iOS suspends WebAudio in background ⇒ on page-hide we hot-swap to a
+   fresh un-routed <audio> element: vocals return, background playback survives. */
+$("karaBtn").hidden = false;
+document.addEventListener("visibilitychange", () => { if (document.hidden && karaOn) swapToDryAudio(); });
+function swapToDryAudio() {
+  const t = audio.currentTime, was = !audio.paused, src = audio.src;
+  try { karaCtx && karaCtx.close(); } catch (e) {}
+  karaCtx = null; karaNodes = null; karaOn = false;
+  $("karaBtn").classList.remove("on");
+  try { localStorage.removeItem("ma_kara"); } catch (e) {}
+  audio.pause();
+  audio = makeAudio();
+  audio.src = src; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx];
+  pendingSeek = t;
+  if (was) audio.play().catch(()=>{});
+}
+$("karaBtn").onclick = () => {
+  karaOn = !karaOn;
+  $("karaBtn").classList.toggle("on", karaOn);
+  try { localStorage.setItem("ma_kara", karaOn ? "1" : ""); } catch (e) {}
+  applyKaraoke();
+};
+function applyKaraoke() {
+  if (!karaOn) { if (karaNodes) { karaNodes.dry.gain.value = 1; karaNodes.wet.gain.value = 0; } return; }
+  if (!karaNodes) {
+    karaCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = karaCtx.createMediaElementSource(audio);
+    const dry = karaCtx.createGain(), wet = karaCtx.createGain();
+    const split = karaCtx.createChannelSplitter(2);
+    const merge = karaCtx.createChannelMerger(2);
+    const g = v => { const n = karaCtx.createGain(); n.gain.value = v; return n; };
+    split.connect(g(1), 0).connect(merge, 0, 0);
+    split.connect(g(-1), 1).connect(merge, 0, 0);
+    split.connect(g(-1), 0).connect(merge, 0, 1);
+    split.connect(g(1), 1).connect(merge, 0, 1);
+    const lp = karaCtx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 140;
+    split.connect(lp, 0); split.connect(lp, 1);
+    lp.connect(merge, 0, 0); lp.connect(merge, 0, 1);
+    src.connect(dry); dry.connect(karaCtx.destination);
+    src.connect(split); merge.connect(wet); wet.connect(karaCtx.destination);
+    karaNodes = { dry, wet };
+  }
+  karaNodes.dry.gain.value = 0; karaNodes.wet.gain.value = 1;
+  if (karaCtx.state === "suspended") karaCtx.resume();
+}
+
 /* fullscreen */
 if (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen) {
   const b = $("fsBtn2"); b.hidden = false;
