@@ -1,9 +1,21 @@
 /* ============ 音樂庫 — encrypted static player ============ */
 "use strict";
 const $ = id => document.getElementById(id);
-const audio = new Audio();
-audio.preload = "auto"; audio.preservesPitch = true;
-if ("webkitPreservesPitch" in audio) audio.webkitPreservesPitch = true;
+function makeAudio() {
+  const a = new Audio();
+  a.preload = "auto"; a.preservesPitch = true;
+  if ("webkitPreservesPitch" in a) a.webkitPreservesPitch = true;
+  a.onplay  = () => { playing = true;  $("playBtn").textContent = "❚❚"; tick(); };
+  a.onpause = () => { playing = false; $("playBtn").textContent = "▶"; render(true); };
+  a.ontimeupdate = () => render();
+  a.onended = () => { if (cur) logPlay(cur, a.currentTime, true);
+    if (!loopOn && queue.length > 1) { const i = queue.findIndex(q => q.id === cur.id);
+      if (i >= 0 && i + 1 < queue.length) { loadTrack(queue[i + 1], true); return; } }
+    render(true); };
+  a.onloadedmetadata = () => { if (pendingSeek > 0 && pendingSeek < a.duration) a.currentTime = pendingSeek; render(true); };
+  return a;
+}
+let audio = makeAudio();
 
 let KEY = null;                       // CryptoKey after unlock
 let CAT = null;                       // decrypted catalog
@@ -334,14 +346,6 @@ async function loadTrack(t, autoplay) {
   mediaSession(t);
   logPlay(t, 0, false);                       // session start row
 }
-audio.onplay  = () => { playing = true;  $("playBtn").textContent = "❚❚"; tick(); };
-audio.onpause = () => { playing = false; $("playBtn").textContent = "▶"; render(true); };
-audio.ontimeupdate = () => render();
-audio.onended = () => { if (cur) logPlay(cur, audio.currentTime, true);
-  if (!loopOn && queue.length > 1) { const i = queue.findIndex(q => q.id === cur.id);
-    if (i >= 0 && i+1 < queue.length) { loadTrack(queue[i+1], true); return; } }
-  render(true); };
-audio.onloadedmetadata = () => { if (pendingSeek > 0 && pendingSeek < audio.duration) audio.currentTime = pendingSeek; render(true); };
 $("playBtn").onclick = () => audio.paused ? audio.play().catch(()=>{}) : audio.pause();
 $("backBtn").onclick = () => { $("player").hidden = true; render(true); };
 
@@ -379,12 +383,23 @@ $("spdBar").oninput = e => { spdIdx = +e.target.value;
   const l = $("spdLbl"); l.textContent = SPD[spdIdx]+"×"; l.classList.toggle("hot", SPD[spdIdx] !== 1); };
 $("loopBtn").onclick = () => { loopOn = !loopOn; applyAudioState(); $("loopBtn").classList.toggle("on", loopOn); };
 
-/* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
-   DESKTOP-ONLY: routing audio through WebAudio breaks iOS background playback,
-   so phones never show it. Desktop also gets an offline ⤓ WAV download. */
-const isDesktop = matchMedia("(pointer: fine)").matches;
-if (isDesktop) { $("karaBtn").hidden = false; $("karaDl").hidden = false; }
-else { try { localStorage.removeItem("ma_kara"); } catch (e) {} karaOn = false; }
+/* 🎤 伴奏 — realtime vocal cancellation + offline ⤓ WAV, now on ALL devices.
+   iOS suspends WebAudio in background ⇒ on page-hide we hot-swap to a fresh
+   un-routed <audio> element: vocals return, background playback survives. */
+$("karaBtn").hidden = false; $("karaDl").hidden = false;
+document.addEventListener("visibilitychange", () => { if (document.hidden && karaOn) swapToDryAudio(); });
+function swapToDryAudio() {
+  const t = audio.currentTime, was = !audio.paused, src = audio.src;
+  try { karaCtx && karaCtx.close(); } catch (e) {}
+  karaCtx = null; karaNodes = null; karaOn = false;
+  $("karaBtn").classList.remove("on");
+  try { localStorage.removeItem("ma_kara"); } catch (e) {}
+  audio.pause();
+  audio = makeAudio();
+  audio.src = src; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx];
+  pendingSeek = t;
+  if (was) audio.play().catch(()=>{});
+}
 $("karaBtn").onclick = () => {
   karaOn = !karaOn;
   $("karaBtn").classList.toggle("on", karaOn);
@@ -442,7 +457,7 @@ function applyKaraoke() {
   karaNodes.dry.gain.value = 0; karaNodes.wet.gain.value = 1;
   if (karaCtx.state === "suspended") karaCtx.resume();
 }
-try { if (isDesktop && localStorage.getItem("ma_kara")) { karaOn = true; $("karaBtn").classList.add("on"); } } catch (e) {}
+try { if (localStorage.getItem("ma_kara")) { karaOn = true; $("karaBtn").classList.add("on"); } } catch (e) {}
 $("addPlBtn").onclick = () => cur && pickPlaylist(cur.id);
 
 /* lyrics */
