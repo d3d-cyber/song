@@ -515,6 +515,72 @@ function mediaSession(t) {
   } catch (e) {}
 }
 
+/* 🤖 伴奏 AI — HTDemucs separation IN-BROWSER via ONNX Runtime Web.
+   Model (172MB) fetched from HuggingFace once → Cache API. WebGPU if available,
+   else single-thread WASM (slow — we warn with an estimate first).            */
+let aiProc = null, aiCache = "";
+$("aiBtn").onclick = async () => {
+  if (!cur) return;
+  const btn = $("aiBtn");
+  const speed = navigator.gpu ? 1.0 : 0.09;               // rough realtime factors
+  const est = Math.max(1, Math.round(cur.dur / speed / 60));
+  if (aiCache === cur.id) { playAIResult(); return; }
+  if (!confirm(`AI 伴奏：${navigator.gpu ? "WebGPU" : "WASM(慢)"} 模式，約需 ${est} 分鐘處理。開始？`)) return;
+  btn.textContent = "模型…";
+  try {
+    if (!window.ort) await new Promise((res, rej) => {
+      const sc = document.createElement("script");
+      sc.src = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.all.min.js";
+      sc.onload = res; sc.onerror = () => rej(new Error("ORT CDN fail")); document.head.appendChild(sc);
+    });
+    ort.env.wasm.numThreads = 1;                           // GitHub Pages: no COOP/COEP
+    const { DemucsProcessor, CONSTANTS } = await import("./dwsrc/index.js");
+    if (!aiProc) {
+      const cache = await caches.open("demucs-model");
+      let modelURL = CONSTANTS.DEFAULT_MODEL_URL;
+      const hit = await cache.match("/htdemucs");
+      if (hit) modelURL = URL.createObjectURL(await hit.blob());
+      else {
+        btn.textContent = "下載模型…";
+        const r = await fetch(CONSTANTS.DEFAULT_MODEL_URL);
+        await cache.put("/htdemucs", r.clone());
+        modelURL = URL.createObjectURL(await r.blob());
+      }
+      aiProc = new DemucsProcessor({ ort,
+        onProgress: p => btn.textContent = "模型 " + Math.round(p * 100) + "%",
+        onLog: (ph, m) => { if (ph === "separation") btn.textContent = "🤖 " + m.slice(0, 14); } });
+      await aiProc.loadModel(modelURL);
+    }
+    btn.textContent = "解碼…";
+    const url = key !== 0 && encKeyCache[`${cur.id}|${key}`] ? encKeyCache[`${cur.id}|${key}`] : await mediaBlob(cur.file);
+    const buf = await decode(url);
+    const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    btn.textContent = "🤖 處理中…";
+    const t0 = performance.now();
+    const res = await aiProc.separate(L, R);
+    const n = res.drums.left.length;
+    const oL = new Float32Array(n), oR = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      oL[i] = res.drums.left[i] + res.bass.left[i] + res.other.left[i];
+      oR[i] = res.drums.right[i] + res.bass.right[i] + res.other.right[i];
+    }
+    aiCache = cur.id;
+    aiResult = toWav(oL, oR, buf.sampleRate);
+    btn.textContent = "🤖 ✓ " + ((performance.now() - t0) / 60000).toFixed(1) + "分";
+    playAIResult();
+  } catch (e) { btn.textContent = "🤖 ✗"; setTimeout(() => btn.textContent = "🤖 伴奏", 2000); }
+};
+let aiResult = null;
+function playAIResult() {
+  if (!aiResult) return;
+  const t = audio.currentTime, was = !audio.paused;
+  audio.pause();
+  audio = makeAudio();
+  audio.src = aiResult; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx];
+  pendingSeek = t;
+  if (was) audio.play().catch(()=>{});
+}
+
 /* fullscreen */
 if (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen) {
   const b = $("fsBtn2"); b.hidden = false;
