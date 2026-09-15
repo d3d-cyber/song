@@ -478,13 +478,11 @@ function mediaSession(t) {
 /* next / prev track (queue order → library order; shuffle-aware) */
 function pickNext() {
   if (!cur) return null;
-  const i = queue.findIndex(q => q.id === cur.id);
   if (shuffleOn) {
     const pool = (queue.length > 1 ? queue : TRACKS).filter(q => q.id !== cur.id);
     return pool[Math.floor(Math.random() * pool.length)];
   }
-  if (i >= 0 && i + 1 < queue.length) return queue[i + 1];
-  const li = TRACKS.findIndex(x => x.id === cur.id);
+  const li = TRACKS.findIndex(x => x.id === cur.id);          // whole-library order, always
   return TRACKS[(li + 1) % TRACKS.length];
 }
 function pickPrev() {
@@ -493,8 +491,6 @@ function pickPrev() {
     const pool = (queue.length > 1 ? queue : TRACKS).filter(q => q.id !== cur.id);
     return pool[Math.floor(Math.random() * pool.length)];
   }
-  const i = queue.findIndex(q => q.id === cur.id);
-  if (i > 0) return queue[i - 1];
   const li = TRACKS.findIndex(x => x.id === cur.id);
   return TRACKS[(li - 1 + TRACKS.length) % TRACKS.length];
 }
