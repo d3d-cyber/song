@@ -363,7 +363,8 @@ async function loadTrack(t, autoplay) {
   lyrOff = parseFloat(localStorage.getItem("ma_off_" + t.id)) || 0;
   setOffLbl();
   const url = key !== 0 && encKeyCache[`${t.id}|${key}`] ? encKeyCache[`${t.id}|${key}`] : await mediaBlob(t.file);
-  audio.src = url; applyAudioState();
+  audio.src = url; applyAudioState(); applyVol();
+  if (stabOn && loudCache[t.id] === undefined) ensureLoud(t).then(applyVol);
   lines = t.lrc ? parseLRC(await (await fetch(await mediaBlob(t.lrc))).text()) : [];
   buildLyrics();
   if (autoplay) audio.play().catch(()=>{});
@@ -474,6 +475,50 @@ function mediaSession(t) {
     navigator.mediaSession.setActionHandler("seekforward", () => audio.currentTime += 10);
   } catch (e) {}
 }
+
+/* 🔊 volume + 📏 穩定 — client-side loudness matching: decode once per track,
+   measure RMS, attenuate loud songs toward a common anchor. Cached per session. */
+let userVol = 1, stabOn = false;
+try { userVol = +localStorage.getItem("ma_vol") || 1;
+  stabOn = localStorage.getItem("ma_stab") === "1"; } catch (e) {}
+const LOUD_ANCHOR = 0.115;                       // ≈ modern-pop comfortable level
+const loudCache = {};
+async function ensureLoud(t) {
+  if (loudCache[t.id] !== undefined) return loudCache[t.id];
+  try {
+    const buf = await decode(await mediaBlob(t.file));
+    const ch = buf.getChannelData(0);
+    const step = Math.max(1, Math.floor(ch.length / 200000));
+    let sum = 0, n = 0;
+    for (let i = 0; i < ch.length; i += step) { sum += ch[i] * ch[i]; n++; }
+    const rms = Math.sqrt(sum / n);
+    loudCache[t.id] = Math.max(0.25, Math.min(1, LOUD_ANCHOR / rms));
+  } catch (e) { loudCache[t.id] = 1; }
+  return loudCache[t.id];
+}
+function applyVol() {
+  if (!audio) return;
+  let v = userVol;
+  if (stabOn && cur && loudCache[cur.id] !== undefined) v *= loudCache[cur.id];
+  audio.volume = Math.max(0, Math.min(1, v));
+}
+$("volBar").value = Math.round(userVol * 100);
+$("volLbl").textContent = Math.round(userVol * 100);
+$("volBar").addEventListener("input", e => {
+  userVol = +e.target.value / 100;
+  $("volLbl").textContent = e.target.value;
+  try { localStorage.setItem("ma_vol", userVol); } catch (err) {}
+  applyVol();
+});
+$("stabBtn").onclick = () => {
+  stabOn = !stabOn;
+  $("stabBtn").classList.toggle("on", stabOn);
+  try { localStorage.setItem("ma_stab", stabOn ? "1" : ""); } catch (err) {}
+  applyVol();
+  if (stabOn && cur && loudCache[cur.id] === undefined)
+    ensureLoud(cur).then(applyVol);               // measure current song async
+};
+if (stabOn) $("stabBtn").classList.add("on");
 
 /* next / prev track (queue order → library order; shuffle-aware) */
 function pickNext() {

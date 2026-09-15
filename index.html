@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>音樂庫</title>
-<link rel="stylesheet" href="style.css?v=5958497bd6">
+<link rel="stylesheet" href="style.css?v=8ed11450cf">
 </head>
 <body>
 
@@ -67,6 +67,12 @@
         <button class="chip" id="aiDl" hidden>⤓AI</button>
       </div>
       <input type="range" id="bar" min="0" max="1000" value="0">
+    <div id="volRow">
+      <span style="font-size:14px">🔊</span>
+      <input type="range" id="volBar" min="0" max="100" value="100">
+      <span id="volLbl" style="font-size:11px;min-width:30px;text-align:right">100</span>
+      <button class="chip" id="stabBtn">📏 穩定</button>
+    </div>
       <div class="row">
         <span id="time">0:00 / 0:00</span>
         <div style="display:flex;align-items:center;gap:8px">
@@ -92,6 +98,6 @@
 </div>
 
 <script src="st.js?v=b02eea1fbd"></script>
-<script src="app.js?v=30641a5c47"></script>
+<script src="app.js?v=9fffe3db36"></script>
 </body>
 </html>
