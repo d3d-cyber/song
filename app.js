@@ -476,31 +476,118 @@ function mediaSession(t) {
   } catch (e) {}
 }
 
-/* 🔊 volume + 📏 穩定 — client-side loudness matching: decode once per track,
-   measure RMS, attenuate loud songs toward a common anchor. Cached per session. */
-let userVol = 1, stabOn = false;
-try { userVol = +localStorage.getItem("ma_vol") || 1;
+/* ═══ Unified FX engine: 🎤 伴奏 (L−R vocal cancel) + 📏 穩定 (real-time AGC) ═══
+   One shared WebAudio graph (an element allows only one MediaElementSource):
+     src → dry ──────────────┐
+     src → karaDSP → karaWet ┼→ stabGain → limiter → destination
+     src → analyser (AGC tap) ┘
+   iOS background safety: page-hide tears the graph down and hot-swaps a fresh
+   un-routed <audio> element (vocals+volume return, playback continues).        */
+let karaOn = false, stabOn = false;
+let fxCtx = null, fxSrc = null, fxEl = null, fxN = null, stabTimer = null, stabLvl = 1;
+const LOUD_ANCHOR = 0.115;
+try { karaOn = localStorage.getItem("ma_kara") === "1";
   stabOn = localStorage.getItem("ma_stab") === "1"; } catch (e) {}
-const LOUD_ANCHOR = 0.115;                       // ≈ modern-pop comfortable level
-const loudCache = {};
-async function ensureLoud(t) {
-  if (loudCache[t.id] !== undefined) return loudCache[t.id];
-  try {
-    const buf = await decode(await mediaBlob(t.file));
-    const ch = buf.getChannelData(0);
-    const step = Math.max(1, Math.floor(ch.length / 200000));
-    let sum = 0, n = 0;
-    for (let i = 0; i < ch.length; i += step) { sum += ch[i] * ch[i]; n++; }
-    const rms = Math.sqrt(sum / n);
-    loudCache[t.id] = Math.max(0.25, Math.min(1, LOUD_ANCHOR / rms));
-  } catch (e) { loudCache[t.id] = 1; }
-  return loudCache[t.id];
+
+function buildFx() {
+  fxCtx = new (window.AudioContext || window.webkitAudioContext)();
+  fxSrc = fxCtx.createMediaElementSource(audio);
+  fxEl = audio;
+  const dry = fxCtx.createGain();
+  const karaWet = fxCtx.createGain();
+  const stabGain = fxCtx.createGain();
+  const limiter = fxCtx.createDynamicsCompressor();
+  limiter.threshold.value = -1; limiter.ratio.value = 20; limiter.knee.value = 0;
+  const analyser = fxCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  // karaoke DSP chain (built once, muted when off)
+  const split = fxCtx.createChannelSplitter(2);
+  const merge = fxCtx.createChannelMerger(2);
+  const g = v => { const n = fxCtx.createGain(); n.gain.value = v; return n; };
+  split.connect(g(1), 0).connect(merge, 0, 0);
+  split.connect(g(-1), 1).connect(merge, 0, 0);
+  split.connect(g(-1), 0).connect(merge, 0, 1);
+  split.connect(g(1), 1).connect(merge, 0, 1);
+  const lp = fxCtx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 140;
+  split.connect(lp, 0); split.connect(lp, 1);
+  lp.connect(merge, 0, 0); lp.connect(merge, 0, 1);
+  merge.connect(karaWet);
+  fxSrc.connect(split);
+  fxSrc.connect(dry);
+  dry.connect(stabGain); karaWet.connect(stabGain);
+  stabGain.connect(limiter); limiter.connect(fxCtx.destination);
+  fxSrc.connect(analyser);
+  fxN = { dry, karaWet, stabGain, analyser };
 }
+function ensureFx() {
+  if (fxN && fxEl !== audio) {                      // element was swapped → rebuild
+    try { fxCtx.close(); } catch (e) {}
+    fxCtx = null; fxN = null;
+  }
+  if (!fxN) buildFx();
+  if (fxCtx.state === "suspended") fxCtx.resume();
+}
+function applyFx() {
+  if (fxN) {
+    fxN.dry.gain.value = karaOn ? 0 : 1;
+    fxN.karaWet.gain.value = karaOn ? 1 : 0;
+    if (!stabOn) { fxN.stabGain.gain.setTargetAtTime(1, fxCtx.currentTime, 0.05); stabLvl = 1; }
+  }
+  if (stabOn) {
+    ensureFx();
+    if (stabTimer) clearInterval(stabTimer);
+    stabTimer = setInterval(agcTick, 200);
+  } else if (stabTimer) { clearInterval(stabTimer); stabTimer = null; }
+}
+function agcTick() {
+  if (!fxN || !stabOn) return;
+  const d = new Float32Array(fxN.analyser.fftSize);
+  fxN.analyser.getFloatTimeDomainData(d);
+  let s = 0;
+  for (let i = 0; i < d.length; i++) s += d[i] * d[i];
+  const rms = Math.sqrt(s / d.length) || 1e-6;
+  const want = Math.max(0.25, Math.min(4, LOUD_ANCHOR / rms));
+  stabLvl += (want - stabLvl) * 0.15;               // gentle ride, no pumping
+  fxN.stabGain.gain.setTargetAtTime(stabLvl, fxCtx.currentTime, 0.2);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && (karaOn || stabOn)) swapToDryAudio();
+});
+function swapToDryAudio() {
+  const t = audio.currentTime, was = !audio.paused, src = audio.src;
+  if (stabTimer) { clearInterval(stabTimer); stabTimer = null; }
+  try { fxCtx && fxCtx.close(); } catch (e) {}
+  fxCtx = null; fxN = null; karaOn = false; stabOn = false; stabLvl = 1;
+  $("karaBtn").classList.remove("on"); $("stabBtn").classList.remove("on");
+  try { localStorage.removeItem("ma_kara"); localStorage.removeItem("ma_stab"); } catch (e) {}
+  audio.pause();
+  audio = makeAudio();
+  audio.src = src; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx]; applyVol();
+  pendingSeek = t;
+  if (was) audio.play().catch(()=>{});
+}
+$("karaBtn").hidden = false;
+$("karaBtn").onclick = () => {
+  karaOn = !karaOn;
+  $("karaBtn").classList.toggle("on", karaOn);
+  try { localStorage.setItem("ma_kara", karaOn ? "1" : ""); } catch (e) {}
+  ensureFx(); applyFx();
+};
+$("stabBtn").onclick = () => {
+  stabOn = !stabOn;
+  $("stabBtn").classList.toggle("on", stabOn);
+  try { localStorage.setItem("ma_stab", stabOn ? "1" : ""); } catch (e) {}
+  ensureFx(); applyFx();
+};
+if (karaOn) $("karaBtn").classList.add("on");
+if (stabOn) $("stabBtn").classList.add("on");
+
+/* 🔊 manual volume (audio.volume; iOS ignores — hardware keys there) */
+let userVol = 1;
+try { userVol = +localStorage.getItem("ma_vol") || 1; } catch (e) {}
 function applyVol() {
   if (!audio) return;
-  let v = userVol;
-  if (stabOn && cur && loudCache[cur.id] !== undefined) v *= loudCache[cur.id];
-  audio.volume = Math.max(0, Math.min(1, v));
+  audio.volume = Math.max(0, Math.min(1, userVol));
 }
 $("volBar").value = Math.round(userVol * 100);
 $("volLbl").textContent = Math.round(userVol * 100);
@@ -510,15 +597,6 @@ $("volBar").addEventListener("input", e => {
   try { localStorage.setItem("ma_vol", userVol); } catch (err) {}
   applyVol();
 });
-$("stabBtn").onclick = () => {
-  stabOn = !stabOn;
-  $("stabBtn").classList.toggle("on", stabOn);
-  try { localStorage.setItem("ma_stab", stabOn ? "1" : ""); } catch (err) {}
-  applyVol();
-  if (stabOn && cur && loudCache[cur.id] === undefined)
-    ensureLoud(cur).then(applyVol);               // measure current song async
-};
-if (stabOn) $("stabBtn").classList.add("on");
 
 /* next / prev track (queue order → library order; shuffle-aware) */
 function pickNext() {
@@ -551,60 +629,6 @@ $("prevBtn").onclick = () => {
   const p = pickPrev();
   if (p) loadTrack(p, true);
 };
-
-/* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
-   On phones, iOS suspends WebAudio in background ⇒ on page-hide we hot-swap to a
-   fresh un-routed <audio> element: vocals return, background playback survives. */
-let karaOn = false, karaCtx = null, karaNodes = null, karaEl = null;
-$("karaBtn").hidden = false;
-document.addEventListener("visibilitychange", () => { if (document.hidden && karaOn) swapToDryAudio(); });
-function swapToDryAudio() {
-  const t = audio.currentTime, was = !audio.paused, src = audio.src;
-  try { karaCtx && karaCtx.close(); } catch (e) {}
-  karaCtx = null; karaNodes = null; karaOn = false;
-  $("karaBtn").classList.remove("on");
-  try { localStorage.removeItem("ma_kara"); } catch (e) {}
-  audio.pause();
-  audio = makeAudio();
-  audio.src = src; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx];
-  pendingSeek = t;
-  if (was) audio.play().catch(()=>{});
-}
-$("karaBtn").onclick = () => {
-  karaOn = !karaOn;
-  $("karaBtn").classList.toggle("on", karaOn);
-  try { localStorage.setItem("ma_kara", karaOn ? "1" : ""); } catch (e) {}
-  applyKaraoke();
-};
-function applyKaraoke() {
-  if (!karaOn) { if (karaNodes) { karaNodes.dry.gain.value = 1; karaNodes.wet.gain.value = 0; } return; }
-  if (karaNodes && karaEl !== audio) {                    // element was hot-swapped → rebuild graph
-    try { karaCtx.close(); } catch (e) {}
-    karaCtx = null; karaNodes = null;
-  }
-  if (!karaNodes) {
-    karaCtx = new (window.AudioContext || window.webkitAudioContext)();
-    karaEl = audio;
-    const src = karaCtx.createMediaElementSource(audio);
-    const dry = karaCtx.createGain(), wet = karaCtx.createGain();
-    const split = karaCtx.createChannelSplitter(2);
-    const merge = karaCtx.createChannelMerger(2);
-    const g = v => { const n = karaCtx.createGain(); n.gain.value = v; return n; };
-    split.connect(g(1), 0).connect(merge, 0, 0);
-    split.connect(g(-1), 1).connect(merge, 0, 0);
-    split.connect(g(-1), 0).connect(merge, 0, 1);
-    split.connect(g(1), 1).connect(merge, 0, 1);
-    const lp = karaCtx.createBiquadFilter();
-    lp.type = "lowpass"; lp.frequency.value = 140;
-    split.connect(lp, 0); split.connect(lp, 1);
-    lp.connect(merge, 0, 0); lp.connect(merge, 0, 1);
-    src.connect(dry); dry.connect(karaCtx.destination);
-    src.connect(split); merge.connect(wet); wet.connect(karaCtx.destination);
-    karaNodes = { dry, wet };
-  }
-  karaNodes.dry.gain.value = 0; karaNodes.wet.gain.value = 1;
-  if (karaCtx.state === "suspended") karaCtx.resume();
-}
 
 /* 🤖 伴奏 AI — HTDemucs in-browser (desktop only: WebGPU/WASM heavy).
    Process current song → play + downloadable WAV. Model cached after first use. */
