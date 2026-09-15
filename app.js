@@ -9,13 +9,23 @@ function makeAudio() {
   a.onpause = () => { playing = false; $("playBtn").textContent = "▶"; render(true); };
   a.ontimeupdate = () => render();
   a.onended = () => { if (cur) logPlay(cur, a.currentTime, true);
-    if (!loopOn && queue.length > 1) { const i = queue.findIndex(q => q.id === cur.id);
-      if (i >= 0 && i + 1 < queue.length) { loadTrack(queue[i + 1], true); return; } }
+    if (!loopOn) {
+      const i = queue.findIndex(q => q.id === cur.id);
+      let next = null;
+      if (shuffleOn && queue.length > 1) {
+        do { next = queue[Math.floor(Math.random() * queue.length)]; } while (next && next.id === cur.id);
+      } else if (i >= 0 && i + 1 < queue.length) next = queue[i + 1];
+      else if (shuffleOn) next = TRACKS[Math.floor(Math.random() * TRACKS.length)];
+      if (next) { loadTrack(next, true); return; }
+      try { localStorage.removeItem("ma_last"); } catch (e) {}
+    }
     render(true); };
   a.onloadedmetadata = () => { if (pendingSeek > 0 && pendingSeek < a.duration) a.currentTime = pendingSeek; render(true); };
   return a;
 }
 let audio = makeAudio();
+let shuffleOn = false;
+try { shuffleOn = localStorage.getItem("ma_shuf") === "1"; } catch (e) {}
 
 let KEY = null;                       // CryptoKey after unlock
 let CAT = null;                       // decrypted catalog
@@ -66,6 +76,7 @@ async function unlock() {
     $("lock").style.display = "none";
     $("app").hidden = false;
     renderView();
+    showResume();
   } catch (e) {
     localStorage.removeItem("ma_pass");                                  // stale/failed → forget
     $("lockErr").textContent =
@@ -98,6 +109,22 @@ function search(q) {
   const out = TRACKS.filter(t => t.hay.includes(q));
   out.sort((a, b) => a.title.length - b.title.length);
   return out;
+}
+
+function showResume() {
+  try {
+    const last = JSON.parse(localStorage.getItem("ma_last") || "null");
+    const t = last && TRACKS.find(x => x.id === last.id);
+    if (t && last.t > 10) {
+      $("resumeTxt").textContent = `${t.title} — ${t.artist} @ ${fmt(last.t)}`;
+      $("resumeBar").hidden = false;
+      $("resumeBar").onclick = () => {
+        $("resumeBar").hidden = true;
+        pendingSeek = last.t;
+        playQueue([t]);
+      };
+    }
+  } catch (e) {}
 }
 
 /* ---------- library view ---------- */
@@ -381,6 +408,12 @@ $("spdBar").oninput = e => { spdIdx = +e.target.value;
   audio.playbackRate = SPD[spdIdx];
   const l = $("spdLbl"); l.textContent = SPD[spdIdx]+"×"; l.classList.toggle("hot", SPD[spdIdx] !== 1); };
 $("loopBtn").onclick = () => { loopOn = !loopOn; applyAudioState(); $("loopBtn").classList.toggle("on", loopOn); };
+$("shufBtn").onclick = () => {
+  shuffleOn = !shuffleOn;
+  $("shufBtn").classList.toggle("on", shuffleOn);
+  try { localStorage.setItem("ma_shuf", shuffleOn ? "1" : ""); } catch (e) {}
+};
+if (shuffleOn) $("shufBtn").classList.add("on");
 
 $("addPlBtn").onclick = () => cur && pickPlaylist(cur.id);
 
@@ -399,7 +432,12 @@ function buildLyrics() {
 function center(i, instant) { const el = $("lyrics").children[i]; if (!el) return;
   $("lyricsWrap").scrollTo({ top: el.offsetTop - $("lyricsWrap").clientHeight/2 + el.clientHeight/2,
     behavior: instant ? "auto" : "smooth" }); }
+let lastSaveT = 0;
 function render(force) {
+  if (cur && playing && audio.currentTime > 3 && Date.now() - lastSaveT > 5000) {
+    lastSaveT = Date.now();
+    try { localStorage.setItem("ma_last", JSON.stringify({ id: cur.id, t: audio.currentTime })); } catch (e) {}
+  }
   if (lines.length) {
     const t = audio.currentTime + 0.15 + lyrOff;
     let i = 0; while (i+1 < lines.length && lines[i+1].t <= t) i++;

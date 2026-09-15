@@ -63,6 +63,9 @@ header { display:flex; gap:8px; padding:12px 16px 8px; flex-shrink:0; }
   font-size:14px; font-weight:700; cursor:pointer; }
 .histRow { padding:10px 4px; border-bottom:1px solid rgba(255,255,255,.06); font-size:14px; }
 .histRow small { color:rgba(255,255,255,.4); display:block; font-size:12px; }
+#resumeBar { background:#1a2b1e; border:1px solid #2f5f3f; color:#c9f2d4; border-radius:10px;
+  padding:10px 14px; margin:8px 0 4px; font-size:14px; cursor:pointer; }
+#resumeBar b { color:#fff; }
 .histBar { display:flex; gap:8px; padding:14px 0; }
 
 /* ---------- player overlay ---------- */
