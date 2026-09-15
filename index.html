@@ -67,7 +67,11 @@
       <input type="range" id="bar" min="0" max="1000" value="0">
       <div class="row">
         <span id="time">0:00 / 0:00</span>
-        <button id="playBtn">▶</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="chip" id="prevBtn">⏮</button>
+          <button id="playBtn">▶</button>
+          <button class="chip" id="nextBtn">⏭</button>
+        </div>
         <div class="chips">
           <button class="chip" id="addPlBtn">＋清單</button>
           <button class="chip" id="syncBtn">同步</button>

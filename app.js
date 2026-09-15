@@ -9,20 +9,7 @@ function makeAudio() {
   a.onpause = () => { playing = false; $("playBtn").textContent = "▶"; render(true); };
   a.ontimeupdate = () => render();
   a.onended = () => { if (cur) logPlay(cur, a.currentTime, true);
-    if (!loopOn) {
-      const i = queue.findIndex(q => q.id === cur.id);
-      let next = null;
-      if (shuffleOn) {
-        const pool = (queue.length > 1 ? queue : TRACKS).filter(q => q.id !== cur.id);
-        next = pool[Math.floor(Math.random() * pool.length)];
-      } else if (i >= 0 && i + 1 < queue.length) {
-        next = queue[i + 1];
-      } else {                                            // queue exhausted → library order
-        const li = TRACKS.findIndex(x => x.id === cur.id);
-        next = TRACKS[(li + 1) % TRACKS.length];
-      }
-      if (next) { loadTrack(next, true); return; }
-    }
+    if (!loopOn) { if (nextTrack(true)) return; }
     render(true); };
   a.onloadedmetadata = () => { if (pendingSeek > 0 && pendingSeek < a.duration) a.currentTime = pendingSeek; render(true); };
   return a;
@@ -487,6 +474,42 @@ function mediaSession(t) {
     navigator.mediaSession.setActionHandler("seekforward", () => audio.currentTime += 10);
   } catch (e) {}
 }
+
+/* next / prev track (queue order → library order; shuffle-aware) */
+function pickNext() {
+  if (!cur) return null;
+  const i = queue.findIndex(q => q.id === cur.id);
+  if (shuffleOn) {
+    const pool = (queue.length > 1 ? queue : TRACKS).filter(q => q.id !== cur.id);
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  if (i >= 0 && i + 1 < queue.length) return queue[i + 1];
+  const li = TRACKS.findIndex(x => x.id === cur.id);
+  return TRACKS[(li + 1) % TRACKS.length];
+}
+function pickPrev() {
+  if (!cur) return null;
+  if (shuffleOn) {
+    const pool = (queue.length > 1 ? queue : TRACKS).filter(q => q.id !== cur.id);
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  const i = queue.findIndex(q => q.id === cur.id);
+  if (i > 0) return queue[i - 1];
+  const li = TRACKS.findIndex(x => x.id === cur.id);
+  return TRACKS[(li - 1 + TRACKS.length) % TRACKS.length];
+}
+function nextTrack() {
+  const n = pickNext();
+  if (n) { loadTrack(n, true); return true; }
+  return false;
+}
+$("nextBtn").onclick = () => nextTrack();
+$("prevBtn").onclick = () => {
+  if (!cur) return;
+  if (audio.currentTime > 3) { audio.currentTime = 0; return; }   // standard: tap ⏮ early = restart
+  const p = pickPrev();
+  if (p) loadTrack(p, true);
+};
 
 /* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
    On phones, iOS suspends WebAudio in background ⇒ on page-hide we hot-swap to a
