@@ -368,7 +368,6 @@ async function loadTrack(t, autoplay) {
   const url = t.aiUrl ? t.aiUrl
     : (key !== 0 && encKeyCache[`${t.id}|${key}`] ? encKeyCache[`${t.id}|${key}`] : await mediaBlob(t.file));
   audio.src = url; applyAudioState(); applyVol();
-  if (stabOn && loudCache[t.id] === undefined) ensureLoud(t).then(applyVol);
   lines = t.lrc ? parseLRC(await (await fetch(await mediaBlob(t.lrc))).text()) : [];
   buildLyrics();
   if (autoplay) audio.play().catch(()=>{});
