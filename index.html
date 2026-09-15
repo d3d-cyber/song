@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>音樂庫</title>
-<link rel="stylesheet" href="style.css?v=8ed11450cf">
+<link rel="stylesheet" href="style.css?v=5958497bd6">
 </head>
 <body>
 
@@ -32,7 +32,6 @@
   <main id="main">
     <div id="resumeBar" hidden>▶ 繼續播放：<b id="resumeTxt"></b></div>
     <div id="libView"></div>
-    <div id="aiView" hidden></div>
     <div id="plView" hidden></div>
     <div id="histView" hidden></div>
   </main>
@@ -40,7 +39,6 @@
   <nav id="nav">
     <button data-v="lib" class="on">音庫</button>
     <button data-v="np">播放中</button>
-    <button data-v="ai" id="aiNav" hidden>AI伴奏</button>
     <button data-v="pl">清單</button>
     <button data-v="hist">紀錄</button>
   </nav>
@@ -65,15 +63,10 @@
         <button class="chip" id="loopBtn">🔁</button>
         <button class="chip" id="shufBtn">🔀</button>
         <button class="chip" id="karaBtn" hidden>🎤 伴奏</button>
-        <button class="chip" id="aiBtn2" hidden>🤖 伴奏</button>
+        <button class="chip" id="aiBtn" hidden>🤖 伴奏</button>
+        <button class="chip" id="aiDl" hidden>⤓AI</button>
       </div>
       <input type="range" id="bar" min="0" max="1000" value="0">
-    <div id="volRow">
-      <span style="font-size:14px">🔊</span>
-      <input type="range" id="volBar" min="0" max="100" value="100">
-      <span id="volLbl" style="font-size:11px;min-width:30px;text-align:right">100</span>
-      <button class="chip" id="stabBtn">📏 穩定</button>
-    </div>
       <div class="row">
         <span id="time">0:00 / 0:00</span>
         <div style="display:flex;align-items:center;gap:8px">
@@ -93,11 +86,12 @@
         <button class="chip" id="lyrPlus">+</button>
         <button class="chip" id="lyrReset">重設</button>
       </div>
+      <div id="aiBarWrap" hidden><div id="aiBar"></div><div id="aiBarLbl"></div></div>
     </div>
   </div>
 </div>
 
 <script src="st.js?v=b02eea1fbd"></script>
-<script src="app.js?v=d5088f81df"></script>
+<script src="app.js?v=30641a5c47"></script>
 </body>
 </html>

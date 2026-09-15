@@ -90,10 +90,7 @@ header { display:flex; gap:8px; padding:12px 16px 8px; flex-shrink:0; }
   background:linear-gradient(transparent, rgba(0,0,0,.92) 28%); }
 #bar, #spdBar { width:100%; appearance:none; -webkit-appearance:none; height:4px; border-radius:2px;
   background:rgba(255,255,255,.2); outline:none; }
-#volRow { display:flex; align-items:center; gap:8px; margin-top:8px; }
-#volBar { flex:1; appearance:none; -webkit-appearance:none; height:4px; border-radius:2px;
-  background:rgba(255,255,255,.2); outline:none; }
-#volBar::-webkit-slider-thumb, #bar::-webkit-slider-thumb, #spdBar::-webkit-slider-thumb { appearance:none; -webkit-appearance:none;
+#bar::-webkit-slider-thumb, #spdBar::-webkit-slider-thumb { appearance:none; -webkit-appearance:none;
   width:14px; height:14px; border-radius:50%; background:#fff; }
 .row { display:flex; align-items:center; justify-content:space-between; margin-top:6px; }
 #time { font-size:11px; color:rgba(255,255,255,.5); font-variant-numeric:tabular-nums; min-width:84px; }
