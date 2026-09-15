@@ -561,6 +561,119 @@ function applyKaraoke() {
   if (karaCtx.state === "suspended") karaCtx.resume();
 }
 
+/* 🤖 伴奏 AI — HTDemucs in-browser (desktop only: WebGPU/WASM heavy).
+   Process current song → play + downloadable WAV. Model cached after first use. */
+const isDesktopAI = matchMedia("(pointer: fine)").matches;
+if (isDesktopAI) { $("aiBtn").hidden = false; }
+let aiProc = null, aiCache = "", aiResult = null, wakeLk = null;
+function setBar(f) {
+  const wrap = $("aiBarWrap"), fill = $("aiBar");
+  if (!wrap || !fill) return;
+  wrap.hidden = false;
+  fill.innerHTML = `<i style="display:block;height:100%;width:${(f * 100).toFixed(1)}%;background:#60a5fa;transition:width .3s"></i>`;
+}
+function setLbl(t) { const l = $("aiBarLbl"); if (l) l.textContent = t; }
+let segMs = 0, segT = 0;
+$("aiBtn").onclick = async () => {
+  if (!cur) return;
+  const btn = $("aiBtn");
+  if (aiCache === cur.id && aiResult) { playAI(); return; }
+  const speed = navigator.gpu ? 1.0 : 0.09;
+  const est = Math.max(1, Math.round(cur.dur / speed / 60));
+  if (!confirm(`AI 伴奏（${navigator.gpu ? "WebGPU" : "WASM 慢"}）：約需 ${est} 分鐘${aiProc ? "" : "＋首次 172MB 模型下載"}。開始？`)) return;
+  try { wakeLk = await navigator.wakeLock?.request("screen"); } catch (e) {}
+  btn.textContent = "模型…";
+  try {
+    if (!window.ort) await new Promise((res, rej) => {
+      const sc = document.createElement("script");
+      sc.src = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.all.min.js";
+      sc.onload = res; sc.onerror = () => rej(new Error("ORT CDN fail")); document.head.appendChild(sc);
+    });
+    ort.env.wasm.numThreads = 1;
+    const { DemucsProcessor, CONSTANTS } = await import("./dwsrc/index.js");
+    if (!aiProc) {
+      const cache = await caches.open("demucs-model");
+      let modelURL;
+      const hit = await cache.match("/htdemucs");
+      if (hit) modelURL = URL.createObjectURL(await hit.blob());
+      else {
+        const urls = [CONSTANTS.DEFAULT_MODEL_URL,
+                      CONSTANTS.DEFAULT_MODEL_URL.replace("huggingface.co", "hf-mirror.com")];
+        let blob = null;
+        for (const u of urls) {
+          try {
+            const r = await fetch(u);
+            if (!r.ok) continue;
+            const total = +(r.headers.get("content-length") || 172000000);
+            const reader = r.body.getReader();
+            const chunks = []; let got = 0;
+            for (;;) { const { done, value } = await reader.read();
+              if (done) break; chunks.push(value); got += value.length;
+              setBar(got / total); setLbl("模型下載 " + (got / 1048576).toFixed(0) + "/" + (total / 1048576).toFixed(0) + "MB"); }
+            blob = new Blob(chunks); break;
+          } catch (e) {}
+        }
+        if (!blob) throw new Error("模型下載失敗");
+        try { await cache.put("/htdemucs", new Response(blob)); } catch (e) {}
+        modelURL = URL.createObjectURL(blob);
+      }
+      aiProc = new DemucsProcessor({ ort,
+        onProgress: p => {
+          if (typeof p === "number") { setBar(p); setLbl("模型 " + Math.round(p * 100) + "%"); }
+          else {
+            const now = performance.now();
+            if (p.currentSegment > 1) {
+              segMs = segMs ? (segMs * 0.7 + (now - segT) * 0.3) : (now - segT);
+              setLbl(`伴奏處理 ${p.currentSegment}/${p.totalSegments} · 剩約 ${Math.max(0, Math.round(segMs * (p.totalSegments - p.currentSegment) / 60000))} 分`);
+            } else setLbl(`伴奏處理 1/${p.totalSegments}…`);
+            segT = now; setBar(p.progress);
+          }
+        }, onLog: () => {} });
+      await aiProc.loadModel(modelURL);
+    }
+    btn.textContent = "解碼…（約10秒）";
+    const url = key !== 0 && encKeyCache[`${cur.id}|${key}`] ? encKeyCache[`${cur.id}|${key}`] : await mediaBlob(cur.file);
+    const buf = await decode(url);
+    const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    btn.textContent = "🤖 處理中…";
+    const t0 = performance.now();
+    const res = await aiProc.separate(L, R);
+    const n = res.drums.left.length;
+    const oL = new Float32Array(n), oR = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      oL[i] = res.drums.left[i] + res.bass.left[i] + res.other.left[i];
+      oR[i] = res.drums.right[i] + res.bass.right[i] + res.other.right[i];
+    }
+    aiCache = cur.id;
+    aiResult = toWav(oL, oR, buf.sampleRate);
+    $("aiDl").hidden = false;
+    btn.textContent = "🤖 ✓ " + ((performance.now() - t0) / 60000).toFixed(1) + "分";
+    playAI();
+  } catch (e) {
+    btn.textContent = "🤖 ✗ " + String(e.message || e).slice(0, 18);
+    setTimeout(() => btn.textContent = "🤖 伴奏", 4000);
+  } finally {
+    try { wakeLk && wakeLk.release(); } catch (e) {}
+    setTimeout(() => { const w = $("aiBarWrap"); if (w) w.hidden = true; }, 3000);
+  }
+};
+function playAI() {
+  if (!aiResult) return;
+  const t = audio.currentTime, was = !audio.paused;
+  audio.pause();
+  audio = makeAudio();
+  audio.src = aiResult; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx];
+  pendingSeek = t;
+  if (was) audio.play().catch(()=>{});
+}
+$("aiDl").onclick = () => {
+  if (!aiResult) return;
+  const a = document.createElement("a");
+  a.href = aiResult;
+  a.download = (cur ? cur.title : "instrumental").replace(/[\\/:*?"<>|]/g, "_") + " (AI伴奏).wav";
+  a.click();
+};
+
 /* fullscreen */
 if (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen) {
   const b = $("fsBtn2"); b.hidden = false;

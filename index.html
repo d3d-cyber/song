@@ -63,6 +63,8 @@
         <button class="chip" id="loopBtn">🔁</button>
         <button class="chip" id="shufBtn">🔀</button>
         <button class="chip" id="karaBtn" hidden>🎤 伴奏</button>
+        <button class="chip" id="aiBtn" hidden>🤖 伴奏</button>
+        <button class="chip" id="aiDl" hidden>⤓AI</button>
       </div>
       <input type="range" id="bar" min="0" max="1000" value="0">
       <div class="row">
@@ -84,11 +86,12 @@
         <button class="chip" id="lyrPlus">+</button>
         <button class="chip" id="lyrReset">重設</button>
       </div>
-    </div><div id="aiBarLbl"></div></div>
+      <div id="aiBarWrap" hidden><div id="aiBar"></div><div id="aiBarLbl"></div></div>
+    </div>
   </div>
 </div>
 
 <script src="st.js?v=b02eea1fbd"></script>
-<script src="app.js?v=fe960ed56a"></script>
+<script src="app.js?v=30641a5c47"></script>
 </body>
 </html>
