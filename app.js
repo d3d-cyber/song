@@ -510,6 +510,7 @@ $("prevBtn").onclick = () => {
 /* 🎤 伴奏 — realtime vocal cancellation (L−R center removal + bass restore).
    On phones, iOS suspends WebAudio in background ⇒ on page-hide we hot-swap to a
    fresh un-routed <audio> element: vocals return, background playback survives. */
+let karaOn = false, karaCtx = null, karaNodes = null, karaEl = null;
 $("karaBtn").hidden = false;
 document.addEventListener("visibilitychange", () => { if (document.hidden && karaOn) swapToDryAudio(); });
 function swapToDryAudio() {
@@ -532,8 +533,13 @@ $("karaBtn").onclick = () => {
 };
 function applyKaraoke() {
   if (!karaOn) { if (karaNodes) { karaNodes.dry.gain.value = 1; karaNodes.wet.gain.value = 0; } return; }
+  if (karaNodes && karaEl !== audio) {                    // element was hot-swapped → rebuild graph
+    try { karaCtx.close(); } catch (e) {}
+    karaCtx = null; karaNodes = null;
+  }
   if (!karaNodes) {
     karaCtx = new (window.AudioContext || window.webkitAudioContext)();
+    karaEl = audio;
     const src = karaCtx.createMediaElementSource(audio);
     const dry = karaCtx.createGain(), wet = karaCtx.createGain();
     const split = karaCtx.createChannelSplitter(2);
