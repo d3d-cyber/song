@@ -32,6 +32,7 @@
   <main id="main">
     <div id="resumeBar" hidden>▶ 繼續播放：<b id="resumeTxt"></b></div>
     <div id="libView"></div>
+    <div id="aiView" hidden></div>
     <div id="plView" hidden></div>
     <div id="histView" hidden></div>
   </main>
@@ -39,6 +40,7 @@
   <nav id="nav">
     <button data-v="lib" class="on">音庫</button>
     <button data-v="np">播放中</button>
+    <button data-v="ai" id="aiNav" hidden>AI伴奏</button>
     <button data-v="pl">清單</button>
     <button data-v="hist">紀錄</button>
   </nav>
@@ -63,8 +65,7 @@
         <button class="chip" id="loopBtn">🔁</button>
         <button class="chip" id="shufBtn">🔀</button>
         <button class="chip" id="karaBtn" hidden>🎤 伴奏</button>
-        <button class="chip" id="aiBtn" hidden>🤖 伴奏</button>
-        <button class="chip" id="aiDl" hidden>⤓AI</button>
+        <button class="chip" id="aiBtn2" hidden>🤖 伴奏</button>
       </div>
       <input type="range" id="bar" min="0" max="1000" value="0">
     <div id="volRow">
@@ -92,12 +93,11 @@
         <button class="chip" id="lyrPlus">+</button>
         <button class="chip" id="lyrReset">重設</button>
       </div>
-      <div id="aiBarWrap" hidden><div id="aiBar"></div><div id="aiBarLbl"></div></div>
     </div>
   </div>
 </div>
 
 <script src="st.js?v=b02eea1fbd"></script>
-<script src="app.js?v=1afa07f2dd"></script>
+<script src="app.js?v=a3906f29ea"></script>
 </body>
 </html>

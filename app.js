@@ -68,6 +68,7 @@ async function unlock() {
     $("app").hidden = false;
     renderView();
     showResume();
+    loadAiResults();
   } catch (e) {
     localStorage.removeItem("ma_pass");                                  // stale/failed → forget
     $("lockErr").textContent =
@@ -138,7 +139,9 @@ function coverEl(cover, albumId, size) {
 function renderView() {
   const q = $("searchIn").value.trim();
   const v = document.querySelector("#nav .on").dataset.v;
-  $("libView").hidden = v !== "lib"; $("plView").hidden = v !== "pl"; $("histView").hidden = v !== "hist";
+  $("libView").hidden = v !== "lib"; $("aiView").hidden = v !== "ai";
+  $("plView").hidden = v !== "pl"; $("histView").hidden = v !== "hist";
+  if (v === "ai") renderAiView();
   if (v === "lib") renderLib(q);
   else if (v === "pl") renderPl();
   else renderHist();
@@ -362,7 +365,8 @@ async function loadTrack(t, autoplay) {
   $("pName").textContent = t.title; $("pArtist").textContent = `${t.artist} · ${t.album}`;
   lyrOff = parseFloat(localStorage.getItem("ma_off_" + t.id)) || 0;
   setOffLbl();
-  const url = key !== 0 && encKeyCache[`${t.id}|${key}`] ? encKeyCache[`${t.id}|${key}`] : await mediaBlob(t.file);
+  const url = t.aiUrl ? t.aiUrl
+    : (key !== 0 && encKeyCache[`${t.id}|${key}`] ? encKeyCache[`${t.id}|${key}`] : await mediaBlob(t.file));
   audio.src = url; applyAudioState(); applyVol();
   if (stabOn && loudCache[t.id] === undefined) ensureLoud(t).then(applyVol);
   lines = t.lrc ? parseLRC(await (await fetch(await mediaBlob(t.lrc))).text()) : [];
@@ -567,6 +571,7 @@ function swapToDryAudio() {
   if (was) audio.play().catch(()=>{});
 }
 $("karaBtn").hidden = false;
+if (isDesktopAI) { $("aiBtn2").hidden = false; $("aiNav").hidden = false; }
 $("karaBtn").onclick = () => {
   karaOn = !karaOn;
   $("karaBtn").classList.toggle("on", karaOn);
@@ -630,118 +635,189 @@ $("prevBtn").onclick = () => {
   if (p) loadTrack(p, true);
 };
 
-/* 🤖 伴奏 AI — HTDemucs in-browser (desktop only: WebGPU/WASM heavy).
-   Process current song → play + downloadable WAV. Model cached after first use. */
+/* ═══ 🤖 AI伴奏 — background processing + dedicated results page ═══
+   Desktop only. Click 🤖 on any song → it queues and processes while you keep
+   using the app. Results (IndexedDB-persisted) list on the AI伴奏 tab with
+   play / download / delete.                                              */
 const isDesktopAI = matchMedia("(pointer: fine)").matches;
-if (isDesktopAI) { $("aiBtn").hidden = false; }
-let aiProc = null, aiCache = "", aiResult = null, wakeLk = null;
-function setBar(f) {
-  const wrap = $("aiBarWrap"), fill = $("aiBar");
-  if (!wrap || !fill) return;
-  wrap.hidden = false;
-  fill.innerHTML = `<i style="display:block;height:100%;width:${(f * 100).toFixed(1)}%;background:#60a5fa;transition:width .3s"></i>`;
+if (isDesktopAI) { $("aiNav").hidden = false; }
+let aiProc = null, aiQueue = [], aiBusy = false, aiWake = null;
+const aiResults = {};                                  // trackId → {t, url, blob, took}
+
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("musicapp-ai", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("inst");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
 }
-function setLbl(t) { const l = $("aiBarLbl"); if (l) l.textContent = t; }
-let segMs = 0, segT = 0;
-$("aiBtn").onclick = async () => {
-  if (!cur) return;
-  const btn = $("aiBtn");
-  if (aiCache === cur.id && aiResult) { playAI(); return; }
-  const speed = navigator.gpu ? 1.0 : 0.09;
-  const est = Math.max(1, Math.round(cur.dur / speed / 60));
-  if (!confirm(`AI 伴奏（${navigator.gpu ? "WebGPU" : "WASM 慢"}）：約需 ${est} 分鐘${aiProc ? "" : "＋首次 172MB 模型下載"}。開始？`)) return;
-  try { wakeLk = await navigator.wakeLock?.request("screen"); } catch (e) {}
-  btn.textContent = "模型…";
-  try {
-    if (!window.ort) await new Promise((res, rej) => {
-      const sc = document.createElement("script");
-      sc.src = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.all.min.js";
-      sc.onload = res; sc.onerror = () => rej(new Error("ORT CDN fail")); document.head.appendChild(sc);
-    });
-    ort.env.wasm.numThreads = 1;
-    const { DemucsProcessor, CONSTANTS } = await import("./dwsrc/index.js");
-    if (!aiProc) {
-      const cache = await caches.open("demucs-model");
-      let modelURL;
-      const hit = await cache.match("/htdemucs");
-      if (hit) modelURL = URL.createObjectURL(await hit.blob());
-      else {
-        const urls = [CONSTANTS.DEFAULT_MODEL_URL,
-                      CONSTANTS.DEFAULT_MODEL_URL.replace("huggingface.co", "hf-mirror.com")];
-        let blob = null;
-        for (const u of urls) {
-          try {
-            const r = await fetch(u);
-            if (!r.ok) continue;
-            const total = +(r.headers.get("content-length") || 172000000);
-            const reader = r.body.getReader();
-            const chunks = []; let got = 0;
-            for (;;) { const { done, value } = await reader.read();
-              if (done) break; chunks.push(value); got += value.length;
-              setBar(got / total); setLbl("模型下載 " + (got / 1048576).toFixed(0) + "/" + (total / 1048576).toFixed(0) + "MB"); }
-            blob = new Blob(chunks); break;
-          } catch (e) {}
-        }
-        if (!blob) throw new Error("模型下載失敗");
-        try { await cache.put("/htdemucs", new Response(blob)); } catch (e) {}
-        modelURL = URL.createObjectURL(blob);
-      }
-      aiProc = new DemucsProcessor({ ort,
-        onProgress: p => {
-          if (typeof p === "number") { setBar(p); setLbl("模型 " + Math.round(p * 100) + "%"); }
-          else {
-            const now = performance.now();
-            if (p.currentSegment > 1) {
-              segMs = segMs ? (segMs * 0.7 + (now - segT) * 0.3) : (now - segT);
-              setLbl(`伴奏處理 ${p.currentSegment}/${p.totalSegments} · 剩約 ${Math.max(0, Math.round(segMs * (p.totalSegments - p.currentSegment) / 60000))} 分`);
-            } else setLbl(`伴奏處理 1/${p.totalSegments}…`);
-            segT = now; setBar(p.progress);
-          }
-        }, onLog: () => {} });
-      await aiProc.loadModel(modelURL);
+async function idbOp(op, key, val) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction("inst", op === "get" ? "readonly" : "readwrite").objectStore("inst")[op](val !== undefined ? val : key, key !== undefined && op !== "get" ? key : undefined);
+    tx.onsuccess = () => res(tx.result); tx.onerror = () => rej(tx.error);
+  });
+}
+
+$("aiBtn2").onclick = () => enqueueAI(cur);            // (button created in player row below)
+function enqueueAI(t) {
+  if (!t || !isDesktopAI) return;
+  if (aiResults[t.id]) { toastAI(); return; }
+  if (aiQueue.find(q => q.id === t.id)) { toastAI(); return; }
+  aiQueue.push({ ...t, progress: 0, status: "等待中" });
+  toastAI(true);
+  renderAiView();
+  aiRunner();
+}
+function toastAI(fresh) {
+  const b = $("aiBtn2");
+  b.textContent = fresh ? "🤖 已排隊" : "🤖 已有";
+  setTimeout(() => b.textContent = "🤖 伴奏", 1500);
+}
+
+async function ensureModel() {
+  if (!window.ort) await new Promise((res, rej) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.all.min.js";
+    sc.onload = res; sc.onerror = () => rej(new Error("ORT CDN fail")); document.head.appendChild(sc);
+  });
+  ort.env.wasm.numThreads = 1;
+  const { DemucsProcessor, CONSTANTS } = await import("./dwsrc/index.js");
+  if (aiProc) return { DemucsProcessor, CONSTANTS };
+  const cache = await caches.open("demucs-model");
+  let modelURL;
+  const hit = await cache.match("/htdemucs");
+  if (hit) modelURL = URL.createObjectURL(await hit.blob());
+  else {
+    const urls = [CONSTANTS.DEFAULT_MODEL_URL,
+                  CONSTANTS.DEFAULT_MODEL_URL.replace("huggingface.co", "hf-mirror.com")];
+    let blob = null;
+    for (const u of urls) {
+      try {
+        const r = await fetch(u);
+        if (!r.ok) continue;
+        const total = +(r.headers.get("content-length") || 172000000);
+        const reader = r.body.getReader();
+        const chunks = []; let got = 0;
+        for (;;) { const { done, value } = await reader.read();
+          if (done) break; chunks.push(value); got += value.length;
+          aiQueue[0].status = `模型 ${(got / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`; renderAiView(); }
+        blob = new Blob(chunks); break;
+      } catch (e) {}
     }
-    btn.textContent = "解碼…（約10秒）";
-    const url = key !== 0 && encKeyCache[`${cur.id}|${key}`] ? encKeyCache[`${cur.id}|${key}`] : await mediaBlob(cur.file);
-    const buf = await decode(url);
-    const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
-    btn.textContent = "🤖 處理中…";
-    const t0 = performance.now();
-    const res = await aiProc.separate(L, R);
-    const n = res.drums.left.length;
-    const oL = new Float32Array(n), oR = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      oL[i] = res.drums.left[i] + res.bass.left[i] + res.other.left[i];
-      oR[i] = res.drums.right[i] + res.bass.right[i] + res.other.right[i];
-    }
-    aiCache = cur.id;
-    aiResult = toWav(oL, oR, buf.sampleRate);
-    $("aiDl").hidden = false;
-    btn.textContent = "🤖 ✓ " + ((performance.now() - t0) / 60000).toFixed(1) + "分";
-    playAI();
-  } catch (e) {
-    btn.textContent = "🤖 ✗ " + String(e.message || e).slice(0, 18);
-    setTimeout(() => btn.textContent = "🤖 伴奏", 4000);
-  } finally {
-    try { wakeLk && wakeLk.release(); } catch (e) {}
-    setTimeout(() => { const w = $("aiBarWrap"); if (w) w.hidden = true; }, 3000);
+    if (!blob) throw new Error("模型下載失敗");
+    try { await cache.put("/htdemucs", new Response(blob)); } catch (e) {}
+    modelURL = URL.createObjectURL(blob);
   }
-};
-function playAI() {
-  if (!aiResult) return;
-  const t = audio.currentTime, was = !audio.paused;
-  audio.pause();
-  audio = makeAudio();
-  audio.src = aiResult; audio.loop = loopOn; audio.playbackRate = SPD[spdIdx];
-  pendingSeek = t;
-  if (was) audio.play().catch(()=>{});
+  aiProc = new DemucsProcessor({ ort,
+    onProgress: p => {
+      const q = aiQueue[0]; if (!q) return;
+      if (typeof p === "number") q.status = "模型 " + Math.round(p * 100) + "%";
+      else q.status = `處理 ${p.currentSegment}/${p.totalSegments}`;
+      renderAiView();
+    }, onLog: () => {} });
+  await aiProc.loadModel(modelURL);
+  return { DemucsProcessor, CONSTANTS };
 }
-$("aiDl").onclick = () => {
-  if (!aiResult) return;
-  const a = document.createElement("a");
-  a.href = aiResult;
-  a.download = (cur ? cur.title : "instrumental").replace(/[\\/:*?"<>|]/g, "_") + " (AI伴奏).wav";
-  a.click();
-};
+
+async function aiRunner() {
+  if (aiBusy || !aiQueue.length) return;
+  aiBusy = true;
+  try { aiWake = await navigator.wakeLock?.request("screen"); } catch (e) {}
+  while (aiQueue.length) {
+    const q = aiQueue[0];
+    try {
+      q.status = "準備…"; renderAiView();
+      await ensureModel();
+      const srcUrl = key !== 0 && encKeyCache[`${q.id}|${key}`] ? encKeyCache[`${q.id}|${key}`] : await mediaBlob(q.file);
+      const buf = await decode(srcUrl);
+      const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+      q.status = "處理中…"; renderAiView();
+      const t0 = performance.now();
+      const res = await aiProc.separate(L, R);
+      const n = res.drums.left.length;
+      const oL = new Float32Array(n), oR = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        oL[i] = res.drums.left[i] + res.bass.left[i] + res.other.left[i];
+        oR[i] = res.drums.right[i] + res.bass.right[i] + res.other.right[i];
+      }
+      const blob = new Blob([wavBytes(oL, oR, buf.sampleRate)], { type: "audio/wav" });
+      const took = ((performance.now() - t0) / 60000).toFixed(1);
+      aiResults[q.id] = { t: q, blob, url: URL.createObjectURL(blob), took };
+      try { await idbOp("put", q.id, { t: q, blob, took }); } catch (e) {}
+    } catch (e) {
+      q.status = "✗ " + String(e.message || e).slice(0, 24);
+      renderAiView();
+      await new Promise(z => setTimeout(z, 800));
+    }
+    aiQueue.shift();
+    renderAiView();
+  }
+  try { aiWake && aiWake.release(); } catch (e) {}
+  aiBusy = false;
+}
+
+function wavBytes(L, R, sr) {                            // reuse toWav logic, returns Uint8Array
+  const n = L.length, buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); v.setUint32(4, 36 + n * 4, true); ws(8, "WAVE"); ws(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true); v.setUint16(32, 4, true);
+  v.setUint16(34, 16, true); ws(36, "data"); v.setUint32(40, n * 4, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    v.setInt16(o, Math.max(-1, Math.min(1, L[i])) * 32767, true); o += 2;
+    v.setInt16(o, Math.max(-1, Math.min(1, R[i])) * 32767, true); o += 2;
+  }
+  return new Uint8Array(buf);
+}
+
+function renderAiView() {
+  const el = $("aiView"); if (!el) return;
+  let html = "";
+  for (const q of aiQueue)
+    html += `<div class="histRow">⏳ <b>${q.title}</b> <small>${q.artist} · ${q.status}</small></div>`;
+  const done = Object.values(aiResults).reverse();
+  for (const r of done)
+    html += `<div class="histRow" data-ai="${r.t.id}"><b>${r.t.title} (AI伴奏)</b>
+      <small>${r.t.artist} · ${r.took}分 · <a href="#" class="aiPlay">▶ 播放</a> ·
+      <a href="#" class="aiDl">⤓ 下載</a> · <a href="#" class="aiDel">✕</a></small></div>`;
+  el.innerHTML = html || "<div class='backLink'>尚無 AI 伴奏 — 在播放器按 🤖 伴奏 排隊處理（背景執行）</div>";
+  el.querySelectorAll(".aiPlay").forEach(a => a.onclick = e => { e.preventDefault(); playAIResult(a.closest("[data-ai]").dataset.ai); });
+  el.querySelectorAll(".aiDl").forEach(a => a.onclick = e => {
+    e.preventDefault();
+    const r = aiResults[a.closest("[data-ai]").dataset.ai]; if (!r) return;
+    const dl = document.createElement("a"); dl.href = r.url;
+    dl.download = r.t.title.replace(/[\\/:*?"<>|]/g, "_") + " (AI伴奏).wav"; dl.click();
+  });
+  el.querySelectorAll(".aiDel").forEach(a => a.onclick = async e => {
+    e.preventDefault();
+    const id = a.closest("[data-ai]").dataset.ai;
+    delete aiResults[id];
+    try { await idbOp("delete", id); } catch (err) {}
+    renderAiView();
+  });
+}
+async function loadAiResults() {                        // restore persisted results on boot
+  try {
+    const db = await idb();
+    await new Promise((res, rej) => {
+      const rq = db.transaction("inst", "readonly").objectStore("inst").openCursor();
+      rq.onsuccess = () => { const c = rq.result;
+        if (c) { aiResults[c.value.t.id] = { t: c.value.t, blob: c.value.blob,
+          url: URL.createObjectURL(c.value.blob), took: c.value.took }; c.continue(); }
+        else res(); };
+      rq.onerror = () => rej(rq.error);
+    });
+  } catch (e) {}
+  renderAiView();
+}
+function playAIResult(id) {
+  const r = aiResults[id]; if (!r) return;
+  const pseudo = { ...r.t, id: "ai:" + r.t.id, title: r.t.title + " (AI伴奏)", aiUrl: r.url };
+  $("player").hidden = false;
+  loadTrack(pseudo, true);
+}
 
 /* fullscreen */
 if (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen) {
