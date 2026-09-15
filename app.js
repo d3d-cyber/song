@@ -12,12 +12,16 @@ function makeAudio() {
     if (!loopOn) {
       const i = queue.findIndex(q => q.id === cur.id);
       let next = null;
-      if (shuffleOn && queue.length > 1) {
-        do { next = queue[Math.floor(Math.random() * queue.length)]; } while (next && next.id === cur.id);
-      } else if (i >= 0 && i + 1 < queue.length) next = queue[i + 1];
-      else if (shuffleOn) next = TRACKS[Math.floor(Math.random() * TRACKS.length)];
+      if (shuffleOn) {
+        const pool = (queue.length > 1 ? queue : TRACKS).filter(q => q.id !== cur.id);
+        next = pool[Math.floor(Math.random() * pool.length)];
+      } else if (i >= 0 && i + 1 < queue.length) {
+        next = queue[i + 1];
+      } else {                                            // queue exhausted → library order
+        const li = TRACKS.findIndex(x => x.id === cur.id);
+        next = TRACKS[(li + 1) % TRACKS.length];
+      }
       if (next) { loadTrack(next, true); return; }
-      try { localStorage.removeItem("ma_last"); } catch (e) {}
     }
     render(true); };
   a.onloadedmetadata = () => { if (pendingSeek > 0 && pendingSeek < a.duration) a.currentTime = pendingSeek; render(true); };
@@ -222,6 +226,13 @@ $("searchIn").addEventListener("input", () => { if (!$("libView").hidden) render
 $("nav").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   document.querySelectorAll("#nav button").forEach(x => x.classList.toggle("on", x === b));
+  if (b.dataset.v === "np") {                                  // 播放中 page
+    if (cur) { $("player").hidden = false; render(true); }
+    else { ["libView","plView","histView"].forEach(id => $(id).hidden = id !== "libView");
+      document.querySelector('#nav [data-v="lib"]').classList.add("on");
+      alert("尚未播放任何歌曲"); }
+    return;
+  }
   renderView();
 });
 
