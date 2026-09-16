@@ -64,6 +64,7 @@ async function unlock() {
     CAT = JSON.parse(new TextDecoder().decode(json));
     if ($("remember").checked) localStorage.setItem("ma_pass", pass);   // store in this profile
     buildIndex();
+    offUiUpdate();
     $("lock").style.display = "none";
     $("app").hidden = false;
     renderView();
@@ -167,6 +168,19 @@ function renderLib(q) {
       { className: "btn", textContent: "▶ 全部播放" });
     playAll.onclick = () => playQueue(al.tracks.map(t => findTrack(t.id)));
     head.appendChild(playAll);
+    const dlAll = Object.assign(document.createElement("button"),
+      { className: "btn", textContent: "⤓ 離線" });
+    dlAll.onclick = async () => {
+      if (!window.caches) { alert("此瀏覽器不支援離線儲存"); return; }
+      const files = al.tracks.flatMap(t => trackFiles(findTrack(t.id)))
+        .concat(al.cover ? [al.cover] : []);
+      try {
+        await dlFiles(files, (d, n) => dlAll.textContent = `⤓ ${d}/${n}`);
+        dlAll.textContent = "✓ 已離線";
+      } catch (e) { dlAll.textContent = "✗ 離線失敗"; }
+      setTimeout(() => dlAll.textContent = "⤓ 離線", 3500);
+    };
+    head.appendChild(dlAll);
     el.appendChild(head);
     al.tracks.forEach(t => el.appendChild(trackRow(findTrack(t.id))));
   } else if (drillArtist) {                      // albums of artist
@@ -206,6 +220,11 @@ function trackRow(t) {
     { className: "addPl", textContent: "＋", title: "加入清單" });
   add.onclick = e => { e.stopPropagation(); pickPlaylist(t.id); };
   row.appendChild(add);
+  const dl = Object.assign(document.createElement("button"),
+    { className: "addPl", textContent: "⤓", title: "離線下載" });
+  dl.dataset.offurl = t.file;
+  dl.onclick = e => { e.stopPropagation(); dlToggle(t); };
+  row.appendChild(dl);
   row.onclick = () => playQueue([t]);
   return row;
 }
@@ -233,7 +252,23 @@ function renderPl() {
   const btn = Object.assign(document.createElement("button"), { className: "btn", textContent: "建立" });
   btn.onclick = () => { const n = inp.value.trim(); if (!n) return;
     plSet([...plGet(), { id: Date.now().toString(36), name: n, tracks: [] }]); inp.value = ""; renderPl(); };
-  bar.append(inp, btn); el.appendChild(bar);
+  const offMgr = Object.assign(document.createElement("button"),
+    { className: "btn", textContent: "⤓ 離線管理" });
+  offMgr.onclick = async () => {                     // usage summary + purge
+    try {
+      const c = await caches.open("ma-off");
+      const keys = await c.keys();
+      let sz = 0;
+      for (const k of keys) { const r = await c.match(k); if (r) sz += +(r.headers.get("content-length") || 0); }
+      const mb = v => (v / 1048576).toFixed(1) + " MB";
+      const est = (await navigator.storage?.estimate?.()) || {};
+      if (!keys.length) { alert("尚無離線檔案 — 在歌曲列按 ⤓ 下載"); return; }
+      if (confirm(`離線快取：${keys.length} 檔 · ${mb(sz)}\n裝置配額：${est.quota ? mb(est.quota) : "?"}（已用 ${est.usage ? mb(est.usage) : "?"}）\n\n清除全部離線副本？`)) {
+        await caches.delete("ma-off"); offSet([]); offUiUpdate(); renderPl();
+      }
+    } catch (e) { alert("讀取失敗：" + (e.message || e)); }
+  };
+  bar.append(inp, btn, offMgr); el.appendChild(bar);
   for (const p of plGet()) {
     const row = document.createElement("div"); row.className = "plRow";
     row.innerHTML = `<b>${p.name}</b><span>${p.tracks.length} 首</span>`;
@@ -273,6 +308,52 @@ function pickPlaylist(trackId) {
   if (p) { p.tracks.push(trackId); plSet(pls); }
   else { const nm = p ? "" : name.trim(); if (nm) plSet([...pls, { id: Date.now().toString(36), name: nm, tracks: [trackId] }]); }
   if (!$("plView").hidden) renderPl();
+}
+
+/* ---------- 離線下載 (offline — stores ENCRYPTED blobs in Cache API; SW serves them when offline) ---------- */
+const OFFLS = "ma_off";                       // localStorage index of offline file URLs
+const offGet = () => { try { return JSON.parse(localStorage.getItem(OFFLS) || "[]"); } catch (e) { return []; } };
+const offSet = a => { try { localStorage.setItem(OFFLS, JSON.stringify(a)); } catch (e) {} };
+const offHas = url => offGet().includes(url);
+const trackFiles = t => [t.file, t.lrc, t.cover].filter(Boolean);
+function offUiUpdate() {
+  document.querySelectorAll("[data-offurl]").forEach(b => {
+    const on = offHas(b.dataset.offurl);
+    b.textContent = on ? "✓⤓" : "⤓";
+    b.classList.toggle("on", on);
+  });
+  const n = offGet().length, chip = $("offBtn");
+  if (chip) { chip.classList.toggle("on", n > 0); chip.title = n ? `離線：${n} 個檔案` : "離線下載目前歌曲"; }
+}
+async function dlFiles(urls, onProg) {        // fetch encrypted blobs → keep in cache (still encrypted at rest)
+  const c = await caches.open("ma-off");
+  const todo = [];
+  for (const u of urls) if (u && !offHas(u) && !(await c.match(u))) todo.push(u);
+  let done = 0;
+  for (const u of todo) {
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(`${u} → HTTP ${r.status}`);
+    await c.put(u, r);
+    offSet([...new Set([...offGet(), u])]);
+    if (onProg) onProg(++done, todo.length);
+  }
+  offUiUpdate();
+}
+async function dlToggle(t) {                  // ⤓ button: download / remove offline copy
+  if (!window.caches) { alert("此瀏覽器不支援離線儲存"); return; }
+  const files = trackFiles(t);
+  if (offHas(t.file)) {
+    if (!confirm(`移除離線副本：${t.title}？`)) return;
+    const c = await caches.open("ma-off");
+    for (const u of files) await c.delete(u);
+    offSet(offGet().filter(u => !files.includes(u)));
+  } else {
+    const b = $("offBtn"); if (b) b.textContent = "⤓…";
+    try { await dlFiles(files); }
+    catch (e) { alert("離線下載失敗：" + (e.message || e)); }
+    if (b) b.textContent = "⤓";
+  }
+  offUiUpdate();
 }
 
 /* ---------- history ---------- */
@@ -414,6 +495,7 @@ $("shufBtn").onclick = () => {
 if (shuffleOn) $("shufBtn").classList.add("on");
 
 $("addPlBtn").onclick = () => cur && pickPlaylist(cur.id);
+$("offBtn").onclick = () => cur && dlToggle(cur);
 
 /* lyrics */
 function parseLRC(text) {
@@ -689,4 +771,6 @@ if (document.documentElement.requestFullscreen || document.documentElement.webki
 document.addEventListener("visibilitychange", () => { if (!document.hidden) render(true); });
 
 /* boot: try stored key first */
+if ("serviceWorker" in navigator && window.isSecureContext)
+  navigator.serviceWorker.register("sw.js").catch(() => {});
 autoUnlock();
