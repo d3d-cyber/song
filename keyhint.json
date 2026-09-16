@@ -1,0 +1,6 @@
+{
+ "alg": "PBKDF2-SHA256",
+ "iter": 310000,
+ "salt": "712f10b11117bad7c9eb063cbf2dada6",
+ "v": 1
+}

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>My Studio — Pilot v3</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:#000}
+body{font-family:-apple-system,"PingFang TC",sans-serif;color:#eee;font-size:15px;
+  display:flex;flex-direction:column;overflow:hidden;
+  padding:calc(10px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom))}
+h2{color:#8df;font-size:17px;margin-bottom:6px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+select{flex:1;background:#111;border:1px solid #333;color:#eee;border-radius:10px;padding:9px;font-size:14px}
+button{font-size:14px;border-radius:10px;border:1px solid #444;background:#18181d;color:#eee;padding:10px 12px;cursor:pointer}
+button.pri{background:#4ade80;color:#000;border:none;font-weight:700}
+button.rec{background:#ef4444;color:#fff;border:none;font-weight:700;width:100%;padding:15px;font-size:17px}
+button:disabled{opacity:.35;cursor:default}
+input[type=password]{width:100%;background:#111;border:1px solid #333;color:#eee;border-radius:10px;padding:12px;font-size:16px}
+#meter{height:5px;background:#222;border-radius:3px;overflow:hidden;margin:6px 0;flex-shrink:0}
+#meterFill{height:100%;width:0%;background:linear-gradient(90deg,#4ade80,#facc15 70%,#ef4444);transition:width .05s}
+/* karaoke lyric area — same feel as the main app */
+#lyricsWrap{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 20px;
+  mask-image:linear-gradient(transparent 0,#000 14%,#000 80%,transparent 100%);
+  -webkit-mask-image:linear-gradient(transparent 0,#000 14%,#000 80%,transparent 100%)}
+.line{padding:13px 0;font-size:clamp(19px,6.2vw,34px);font-weight:600;line-height:1.5;
+  color:rgba(255,255,255,.28);text-align:center;transition:color .3s,font-size .3s}
+.line.active{color:#fff;font-size:clamp(28px,9vw,52px);font-weight:700}
+.line.gap{color:rgba(255,255,255,.14);letter-spacing:6px}
+/* bottom bar */
+#bottom{flex-shrink:0;padding-top:8px}
+#tests{background:#0d0d10;border-radius:10px;padding:8px;margin-top:8px;font:11px/1.7 monospace;color:#9f9;max-height:150px;overflow:auto;white-space:pre-wrap}
+#log{background:#000;border-radius:10px;padding:8px;font:11px/1.6 monospace;color:#9f9;max-height:120px;overflow:auto;margin-top:6px;white-space:pre-wrap}
+details summary{color:#7cf;cursor:pointer;font-size:14px;padding:4px 0}
+canvas{width:100%;height:44px;background:#111;border-radius:8px;margin:4px 0}
+.hidden{display:none}
+.t{padding:3px 0;border-bottom:1px dotted #222}
+</style>
+</head>
+<body>
+
+<h2>🎤 My Studio <small style="color:#666">v3</small></h2>
+
+<div id="lock">
+  <input type="password" id="pass" placeholder="passphrase">
+  <div class="row"><button class="pri" style="flex:1" onclick="unlock()">解鎖</button></div>
+</div>
+
+<div id="app" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <div class="row" style="flex-shrink:0">
+    <select id="songSel" onchange="loadLrc()"></select>
+    <label style="display:flex;align-items:center;gap:4px;font-size:13px;color:#aaa">
+      <input type="checkbox" id="instMode" checked>消原唱</label>
+  </div>
+
+  <div id="lyricsWrap"><div id="lyrics"></div></div>
+
+  <div id="bottom">
+    <div id="meter"><div id="meterFill"></div></div>
+    <div class="row">
+      <button class="pri" style="flex:1" id="armBtn" onclick="arm()">🎤 準備錄音（3秒倒數）</button>
+      <button class="rec hidden" style="flex:1;width:auto" id="stopBtn" onclick="stopRec()">⏹ 停止</button>
+    </div>
+    <canvas id="wave" class="hidden"></canvas>
+    <div class="row">
+      <button class="pri" style="flex:1" id="procBtn" onclick="process()" disabled>✨ 製作</button>
+    </div>
+    <div class="row">
+      <button onclick="playOut('vocal')" id="pv" disabled>🎧 人聲</button>
+      <button onclick="playOut('mix')" id="pm" disabled>🎧 完成版</button>
+      <button onclick="dl()" id="dl" disabled>⤓ WAV</button>
+    </div>
+  </div>
+
+  <details><summary>🧪 測試套件</summary>
+    <div class="row">
+      <button onclick="t1()">T1 麥克風</button><button onclick="t2()">T2 收音</button>
+      <button onclick="t3()">T3 延遲</button><button onclick="t4()">T4 殘響</button><button onclick="t5()">T5 渲染</button>
+      <button onclick="t6()">T6 光譜降噪</button>
+    </div>
+    <div id="tests"></div>
+  </details>
+  <div id="log"></div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const log = m => { $("log").textContent = m + "\n" + $("log").textContent; };
+const T = (n, p, i) => $("tests").insertAdjacentHTML("beforeend", `<div class="t">${p ? "✅" : "❌"} <b>${n}</b> ${i || ""}</div>`);
+
+/* ── crypto ── */
+let KEY = null, TRACKS = [];
+async function unlock() {
+  try {
+    const hint = await (await fetch("keyhint.json")).json();
+    const pm = await crypto.subtle.importKey("raw", new TextEncoder().encode($("pass").value), "PBKDF2", false, ["deriveKey"]);
+    KEY = await crypto.subtle.deriveKey({ name: "PBKDF2",
+      salt: Uint8Array.from(hint.salt.match(/../g).map(h => parseInt(h, 16))), iterations: hint.iter, hash: "SHA-256" },
+      pm, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    const buf = await (await fetch("data/manifest.enc")).arrayBuffer();
+    const cat = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(buf, 0, 12) }, KEY, buf.slice(12))));
+    TRACKS = [];
+    for (const a of cat.artists) for (const al of a.albums) for (const t of al.tracks)
+      TRACKS.push({ ...t, artist: a.name });
+    $("songSel").innerHTML = TRACKS.map((t, i) => `<option value="${i}">${t.artist} — ${t.title}</option>`).join("");
+    $("lock").classList.add("hidden"); $("app").classList.remove("hidden");
+    log("unlocked: " + TRACKS.length + " tracks");
+    loadLrc();
+  } catch (e) { alert("解鎖失敗: " + e.message); }
+}
+async function decFile(url) {
+  const buf = await (await fetch(url)).arrayBuffer();
+  return await crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(buf, 0, 12) }, KEY, buf.slice(12));
+}
+
+/* ── lyrics (main-app style) ── */
+let LRC = [];
+async function loadLrc() {
+  LRC = [];
+  const t = TRACKS[+$("songSel").value];
+  if (!t || !t.lrc) { $("lyrics").innerHTML = '<div class="line active">（此歌無歌詞）</div>'; return; }
+  try {
+    const text = new TextDecoder().decode(await decFile(t.lrc));
+    LRC = text.trim().split("\n").map(l => {
+      const m = l.match(/^\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$/);
+      return m ? { t: +m[1] * 60 + +m[2], text: m[3].trim() } : null;
+    }).filter(x => x && x.text);
+    $("lyrics").innerHTML = LRC.map((l, i) =>
+      `<div class="line${l.text ? "" : " gap"}" data-i="${i}">${l.text || "♪ ♪ ♪"}</div>`).join("");
+    renderLyr(-1);
+  } catch (e) { $("lyrics").innerHTML = '<div class="line active">歌詞載入失敗</div>'; }
+}
+let curLyr = -1;
+function renderLyr(songTime) {
+  if (!LRC.length) return;
+  let i = 0; while (i + 1 < LRC.length && LRC[i + 1].t <= songTime) i++;
+  if (i === curLyr) return;
+  curLyr = i;
+  const els = $("lyrics").children;
+  for (let k = 0; k < els.length; k++) els[k].classList.toggle("active", k === i);
+  const el = els[i]; if (!el) return;
+  const w = $("lyricsWrap");
+  w.scrollTo({ top: el.offsetTop - w.clientHeight / 2 + el.clientHeight / 2, behavior: "smooth" });
+}
+
+/* ── ctx / mic ── */
+let ctx = null;
+function actx() { return ctx || (ctx = new (window.AudioContext || window.webkitAudioContext)()); }
+async function getMic() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+  log("mic: " + JSON.stringify(stream.getAudioTracks()[0].getSettings()));
+  return stream;
+}
+
+/* ── STFT spectral denoise (Wiener soft-gate, musical-noise smoothed) ── */
+function fft(re, im, inverse) {
+  const N = re.length;
+  for (let i = 1, j = 0; i < N; i++) {
+    let bit = N >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= N; len <<= 1) {
+    const ang = (inverse ? 2 : -2) * Math.PI / len;
+    for (let i = 0; i < N; i += len)
+      for (let j = 0; j < len / 2; j++) {
+        const wr = Math.cos(ang * j), wi = Math.sin(ang * j);
+        const xr = re[i + j + len / 2] * wr - im[i + j + len / 2] * wi;
+        const xi = re[i + j + len / 2] * wi + im[i + j + len / 2] * wr;
+        re[i + j + len / 2] = re[i + j] - xr; im[i + j + len / 2] = im[i + j] - xi;
+        re[i + j] += xr; im[i + j] += xi;
+      }
+  }
+  if (inverse) for (let i = 0; i < N; i++) { re[i] /= N; im[i] /= N; }
+}
+async function spectralDenoise(vdata, sr, prog) {
+  const N = 1024, hop = 512;
+  const win = new Float32Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / N));
+  const nFrames = Math.max(1, Math.ceil((vdata.length - N) / hop) + 1);
+
+  /* frame energies → noise frames = 12 quietest */
+  const energies = [];
+  for (let f = 0; f < nFrames; f++) {
+    let s = 0; const o0 = f * hop;
+    for (let i = 0; i < N; i += 4) { const v = vdata[o0 + i] || 0; s += v * v; }
+    energies.push([s, f]);
+  }
+  energies.sort((a, b) => a[0] - b[0]);
+  const noiseFrames = energies.slice(0, Math.min(12, nFrames)).map(e => e[1]);
+  const noiseMag = new Float32Array(N / 2 + 1);
+  const re = new Float32Array(N), im = new Float32Array(N);
+  let cnt = 0;
+  for (const f of noiseFrames) {
+    for (let i = 0; i < N; i++) { re[i] = (vdata[f * hop + i] || 0) * win[i]; im[i] = 0; }
+    fft(re, im, false);
+    for (let k = 0; k <= N / 2; k++) noiseMag[k] += Math.hypot(re[k], im[k]);
+    cnt++;
+  }
+  for (let k = 0; k <= N / 2; k++) noiseMag[k] /= Math.max(cnt, 1);
+
+  /* Wiener soft-gate each frame */
+  const out = new Float32Array(vdata.length + N);
+  const wsum = new Float32Array(vdata.length + N);
+  const prevG = new Float32Array(N / 2 + 1);
+  const OVER = 2.4, FLOOR = 0.05, SMOOTH = 0.55;
+  for (let f = 0; f < nFrames; f++) {
+    for (let i = 0; i < N; i++) { re[i] = (vdata[f * hop + i] || 0) * win[i]; im[i] = 0; }
+    fft(re, im, false);
+    for (let k = 0; k <= N / 2; k++) {
+      const mag = Math.hypot(re[k], im[k]);
+      let g = Math.max(FLOOR, (mag - OVER * noiseMag[k]) / (mag + 1e-9));
+      g = g * (1 - SMOOTH) + prevG[k] * SMOOTH;         // temporal smoothing → no musical noise
+      prevG[k] = g;
+      if (k === 0 || k === N / 2) { re[k] *= g; im[k] *= g; }
+      else { re[k] *= g; im[k] *= g; re[N - k] *= g; im[N - k] *= g; }
+    }
+    fft(re, im, true);
+    for (let i = 0; i < N; i++) {
+      out[f * hop + i] += re[i] * win[i];
+      wsum[f * hop + i] += win[i] * win[i];
+    }
+    if ((f & 2047) === 0) { if (prog) prog(f / nFrames); await new Promise(z => setTimeout(z)); }
+  }
+  for (let i = 0; i < out.length; i++)
+    out[i] = wsum[i] > 1e-6 ? out[i] / wsum[i] : 0;
+  return out;
+}
+
+/* ── tests ── */
+async function t1() {
+  try { const s = await getMic(); const st = s.getAudioTracks()[0].getSettings();
+    T("T1 麥克風", true, `EC:${st.echoCancellation}`); s.getTracks().forEach(t => t.stop()); }
+  catch (e) { T("T1 麥克風", false, e.message); }
+}
+async function t2() {
+  try {
+    const stream = await getMic(); const c = actx(); if (c.state === "suspended") await c.resume();
+    const src = c.createMediaStreamSource(stream);
+    const proc = c.createScriptProcessor(4096, 1, 1);
+    let peak = 0, sum = 0, n = 0;
+    proc.onaudioprocess = e => { const d = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; sum += d[i] * d[i]; n++; } };
+    src.connect(proc); proc.connect(c.destination);
+    log("T2: 唱一句…（5秒）");
+    await new Promise(z => setTimeout(z, 5000));
+    proc.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop());
+    T("T2 收音", Math.sqrt(sum / Math.max(n, 1)) > 0.005, `peak ${peak.toFixed(2)}`);
+  } catch (e) { T("T2 收音", false, e.message); }
+}
+function t3() { const c = actx();
+  T("T3 延遲", true, `${((c.baseLatency || 0) * 1000).toFixed(0)}+${((c.outputLatency || 0) * 1000).toFixed(0)}ms @${c.sampleRate}`); }
+function makeIR(c, seconds = 2.2, decay = 3.2) {
+  const len = Math.floor(c.sampleRate * seconds);
+  const ir = c.createBuffer(2, len, c.sampleRate);
+  for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay); }
+  return ir;
+}
+async function t4() {
+  const c = actx(); if (c.state === "suspended") await c.resume();
+  const conv = c.createConvolver(); conv.buffer = makeIR(c);
+  const osc = c.createOscillator(); osc.frequency.value = 440;
+  const g = c.createGain(); g.gain.setValueAtTime(0.4, c.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.15);
+  osc.connect(g); g.connect(conv); conv.connect(c.destination);
+  osc.start(); osc.stop(c.currentTime + 0.2);
+  T("T4 殘響", true, "已觸發");
+}
+async function t5() {
+  try {
+    const sr = 44100, off = new OfflineAudioContext(2, sr * 2, sr);
+    const v = off.createBufferSource();
+    const vb = off.createBuffer(1, sr * 2, sr); const vd = vb.getChannelData(0);
+    for (let i = 0; i < vd.length; i++) vd[i] = 0.3 * Math.sin(2 * Math.PI * 440 * i / sr);
+    v.buffer = vb; v.connect(off.destination); v.start();
+    const out = await off.startRendering();
+    T("T5 渲染", true, "offline ctx OK");
+  } catch (e) { T("T5 渲染", false, e.message); }
+}
+async function t6() {
+  try {
+    const sr = 48000, n = sr * 2;                     // 2s: noise + tone
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) x[i] = 0.02 * (Math.random() * 2 - 1);
+    for (let i = sr; i < n; i++) x[i] += 0.3 * Math.sin(2 * Math.PI * 440 * i / sr);
+    let nb = 0, ns = 0;
+    for (let i = 0; i < sr; i += 8) { nb += Math.abs(x[i]); ns++; }
+    const noiseBefore = nb / ns;
+    const y = await spectralDenoise(x, sr);
+    nb = 0; ns = 0;
+    for (let i = 0; i < sr; i += 8) { nb += Math.abs(y[i]); ns++; }
+    const noiseAfter = nb / ns;
+    let tb = 0, ts = 0;
+    for (let i = sr; i < n; i += 8) { tb += Math.abs(y[i]); ts++; }
+    const toneAfter = tb / ts;
+    T("T6 光譜降噪", noiseAfter < noiseBefore * 0.6 && toneAfter > 0.05,
+      `noise ${(noiseBefore).toFixed(4)}→${(noiseAfter).toFixed(4)} (${(100 - noiseAfter / noiseBefore * 100).toFixed(0)}%↓) tone kept ${toneAfter.toFixed(3)}`);
+  } catch (e) { T("T6 光譜降噪", false, e.message); }
+}
+
+/* ── recording ── */
+let rec = null;
+async function arm() {
+  const c = actx(); if (c.state === "suspended") await c.resume();
+  const t = TRACKS[+$("songSel").value];
+  log("loading " + t.title + "…");
+  const ab = await decFile(t.file);
+  const songBuf = await c.decodeAudioData(ab.slice(0));
+  const stream = await getMic();
+  const mic = c.createMediaStreamSource(stream);
+  const proc = c.createScriptProcessor(4096, 1, 1);
+  const an = c.createAnalyser(); an.fftSize = 2048; mic.connect(an);
+  rec = { c, t, songBuf, stream, mic, proc, chunks: [], clipN: 0, an,
+    meterData: new Float32Array(an.fftSize), recording: false, startCtx: 0, songSrc: null, timer: null, samples: 0 };
+
+  log("3…"); await new Promise(z => setTimeout(z, 1000));
+  log("2…"); await new Promise(z => setTimeout(z, 1000));
+  log("1…"); await new Promise(z => setTimeout(z, 1000));
+
+  proc.onaudioprocess = e => {
+    if (!rec || !rec.recording) return;
+    const d = e.inputBuffer.getChannelData(0);
+    rec.chunks.push(new Float32Array(d)); rec.samples += d.length;
+    for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 0.98) rec.clipN++;
+  };
+  mic.connect(proc); proc.connect(c.destination);
+
+  const songSrc = c.createBufferSource(); songSrc.buffer = songBuf;
+  if ($("instMode").checked) {
+    const split = c.createChannelSplitter(2), merge = c.createChannelMerger(2);
+    const g = v => { const n = c.createGain(); n.gain.value = v; return n; };
+    split.connect(g(1), 0).connect(merge, 0, 0); split.connect(g(-1), 1).connect(merge, 0, 0);
+    split.connect(g(-1), 0).connect(merge, 0, 1); split.connect(g(1), 1).connect(merge, 0, 1);
+    const lp = c.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 140;
+    split.connect(lp, 0); split.connect(lp, 1); lp.connect(merge, 0, 0); lp.connect(merge, 0, 1);
+    songSrc.connect(split); merge.connect(c.destination);
+  } else songSrc.connect(c.destination);
+
+  rec.recording = true; rec.startCtx = c.currentTime;
+  songSrc.start(); rec.songSrc = songSrc;
+  $("armBtn").classList.add("hidden"); $("stopBtn").classList.remove("hidden");
+  rec.timer = setInterval(() => {
+    rec.an.getFloatTimeDomainData(rec.meterData);
+    let s = 0; for (let i = 0; i < rec.meterData.length; i++) s += rec.meterData[i] * rec.meterData[i];
+    $("meterFill").style.width = Math.min(100, Math.sqrt(s / rec.meterData.length) * 250) + "%";
+    renderLyr(rec.c.currentTime - rec.startCtx);
+  }, 100);
+  log("● recording — sing!");
+}
+function stopRec() {
+  if (!rec || !rec.recording) return;
+  rec.recording = false;
+  clearInterval(rec.timer);
+  try { rec.songSrc.stop(); } catch (e) {}
+  rec.proc.disconnect(); rec.mic.disconnect(); rec.stream.getTracks().forEach(t => t.stop());
+  log(`recorded ${(rec.samples / rec.c.sampleRate).toFixed(1)}s clip ${rec.clipN}`);
+  T("錄音", rec.samples > rec.c.sampleRate, `${(rec.samples / rec.c.sampleRate).toFixed(1)}s`);
+  $("armBtn").classList.remove("hidden"); $("stopBtn").classList.add("hidden");
+  $("procBtn").disabled = false;
+}
+
+/* ── center-cancel (JS, same as live monitoring) ── */
+function centerCancel(buf) {
+  const sr = buf.sampleRate;
+  const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const n = Math.min(L.length, R.length);
+  const oL = new Float32Array(n), oR = new Float32Array(n);
+  const a = 1 - Math.exp(-2 * Math.PI * 140 / sr); let y = 0;
+  for (let i = 0; i < n; i++) {
+    const l = L[i], r = R[i];
+    y += a * ((l + r) - y);
+    oL[i] = l - r + y; oR[i] = r - l + y;
+  }
+  const out = new AudioBuffer({ length: n, numberOfChannels: 2, sampleRate: sr });
+  out.copyToChannel(oL, 0); out.copyToChannel(oR, 1);
+  return out;
+}
+
+/* ── production ── */
+let mixBuf = null, vocalCleanBuf = null;
+async function process() {
+  if (!rec || !rec.chunks.length) return;
+  const btn = $("procBtn"); btn.disabled = true;
+  const c = rec.c, sr = c.sampleRate;
+  const total = rec.samples;
+  const vdata = new Float32Array(total);
+  let o = 0; for (const ch of rec.chunks) { vdata.set(ch, o); o += ch.length; }
+
+  btn.textContent = "🔇 光譜降噪…";
+  const clean = await spectralDenoise(vdata, sr, p => btn.textContent = "🔇 光譜降噪 " + Math.round(p * 100) + "%");
+
+  /* cleaned vocal preview buffer */
+  {
+    const offV = new OfflineAudioContext(1, total, sr);
+    const vsrc = offV.createBufferSource();
+    const vb2 = offV.createBuffer(1, total, sr); vb2.copyToChannel(clean.subarray(0, total), 0);
+    vsrc.buffer = vb2; vsrc.connect(offV.destination); vsrc.start(0);
+    vocalCleanBuf = await offV.startRendering();
+  }
+
+  btn.textContent = "🎚 混音…";
+  const off = new OfflineAudioContext(2, total, sr);
+  const v = off.createBufferSource();
+  const vb = off.createBuffer(1, total, sr); vb.copyToChannel(clean.subarray(0, total), 0); v.buffer = vb;
+  const hp = off.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 80;
+  const gate = off.createDynamicsCompressor();
+  gate.threshold.value = -45; gate.ratio.value = 8; gate.knee.value = 2;
+  gate.attack.value = 0.003; gate.release.value = 0.15;
+  const comp = off.createDynamicsCompressor();
+  comp.threshold.value = -24; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.25;
+  const shelf = off.createBiquadFilter(); shelf.type = "peaking";
+  shelf.frequency.value = 3000; shelf.gain.value = 3; shelf.Q.value = 0.8;
+  const conv = off.createConvolver(); conv.buffer = makeIR(off, 2.2, 3.2);
+  const wet = off.createGain(); wet.gain.value = 0.22;
+  const dry = off.createGain(); dry.gain.value = 1;
+  const vGain = off.createGain(); vGain.gain.value = 1.5;
+  v.connect(hp); hp.connect(gate); gate.connect(comp); comp.connect(shelf);
+  shelf.connect(dry); dry.connect(vGain);
+  shelf.connect(conv); conv.connect(wet); wet.connect(vGain);
+  vGain.connect(off.destination);
+
+  let backingBuf = rec.songBuf;
+  if ($("instMode").checked) backingBuf = centerCancel(rec.songBuf);
+  const b = off.createBufferSource(); b.buffer = backingBuf;
+  const bGain = off.createGain();
+  bGain.gain.value = $("instMode").checked ? 0.9 : 0.55;
+  b.connect(bGain); bGain.connect(off.destination);
+
+  const envStep = Math.floor(sr * 0.05);
+  let eg = 1.0;
+  for (let i = 0; i + envStep < total; i += envStep) {
+    let s = 0; for (let j = i; j < i + envStep; j++) s += vdata[j] * vdata[j];
+    const rms = Math.sqrt(s / envStep);
+    const want = rms > 0.02 ? 0.72 : 1.0;
+    eg += (want - eg) * 0.4;
+    bGain.gain.setTargetAtTime(eg * ($("instMode").checked ? 0.9 : 0.55), i / sr, 0.08);
+  }
+
+  v.start(0); b.start(0);
+  let out = await off.startRendering();
+
+  btn.textContent = "💿 母帶…";
+  const off2 = new OfflineAudioContext(2, out.length, sr);
+  const s2 = off2.createBufferSource(); s2.buffer = out;
+  const ws = off2.createWaveShaper();
+  const curve = new Float32Array(1024);
+  for (let i = 0; i < 1024; i++) { const x = (i / 511.5) - 1; curve[i] = Math.tanh(1.6 * x) / Math.tanh(1.6); }
+  ws.curve = curve;
+  const mg = off2.createGain(); mg.gain.value = 1.15;
+  s2.connect(ws); ws.connect(mg); mg.connect(off2.destination); s2.start();
+  mixBuf = await off2.startRendering();
+
+  btn.textContent = "✨ 完成！";
+  $("pv").disabled = false; $("pm").disabled = false; $("dl").disabled = false;
+  log("✓ mix " + (mixBuf.length / sr).toFixed(1) + "s");
+}
+function playOut(which) {
+  const c = actx(); if (c.state === "suspended") c.resume();
+  const s = c.createBufferSource();
+  if (which === "vocal" && vocalCleanBuf) s.buffer = vocalCleanBuf;
+  else if (mixBuf) s.buffer = mixBuf;
+  s.connect(c.destination); s.start();
+}
+function dl() {
+  if (!mixBuf) return;
+  const L = mixBuf.getChannelData(0), R = mixBuf.numberOfChannels > 1 ? mixBuf.getChannelData(1) : L;
+  const n = L.length, buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, "RIFF"); v.setUint32(4, 36 + n * 4, true); ws(8, "WAVE"); ws(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, mixBuf.sampleRate, true); v.setUint32(28, mixBuf.sampleRate * 4, true);
+  v.setUint16(32, 4, true); v.setUint16(34, 16, true); ws(36, "data"); v.setUint32(40, n * 4, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) {
+    v.setInt16(o, Math.max(-1, Math.min(1, L[i])) * 32767, true); o += 2;
+    v.setInt16(o, Math.max(-1, Math.min(1, R[i])) * 32767, true); o += 2;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  a.download = (rec ? rec.t.title : "mix").replace(/[\\/:*?"<>|]/g, "_") + " (我的演唱).wav";
+  a.click();
+}
+</script>
+</body>
+</html>
