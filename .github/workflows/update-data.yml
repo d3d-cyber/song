@@ -1,0 +1,58 @@
+name: SmartPLAY data refresh
+
+# Refresh the SmartPLAY activity dataset used by smartplay-calendar/.
+#
+# IMPORTANT — LCSD geo-block:
+#   The SmartPLAY API (www.smartplay.lcsd.gov.hk) only serves Hong Kong IPs and
+#   fingerprints TLS clients (plain curl from any datacenter fails the WAF).
+#   GitHub-hosted runners (Azure US/EU) therefore CANNOT pull this API directly.
+#   The ACTIVE updater is the VM-side cron (HK exit + headless Firefox):
+#     /home/ubuntu/browsebox/reports/update_smartplay.sh   (every 6h)
+#   which publishes data.js through the same force-push pipeline as the music app.
+#
+# This workflow provides:
+#   * a daily reachability probe with a clear status (so blockage is visible), and
+#   * a ready `self-hosted` job — register a runner on the VM and flip runs-on
+#     to move the whole pipeline into Actions.
+
+on:
+  schedule:
+    - cron: "30 22 * * *"   # daily 06:30 HKT
+  workflow_dispatch:
+    inputs:
+      runner_type:
+        description: "hosted (probe only) or self-hosted (full refresh)"
+        default: "hosted"
+        type: choice
+        options: [hosted, self-hosted]
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-probe:
+    if: inputs.runner_type != 'self-hosted'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe SmartPLAY API reachability
+        run: |
+          CODE=$(curl -s -o /tmp/resp -w "%{http_code}" -m 20 \
+            -H "channel: INTERNET" -H "Accept-Language: zh-hk" \
+            "https://www.smartplay.lcsd.gov.hk/rest/param/api/v1/publ/enums/as_enroll_method" || echo 000)
+          echo "HTTP $CODE"
+          head -c 300 /tmp/resp || true
+          if [ "$CODE" != "200" ]; then
+            echo "::notice::SmartPLAY is geo-blocked/WAF'd for this runner IP (expected on GitHub-hosted runners)."
+            echo "The VM cron (HK exit) remains the active data updater."
+            exit 0
+          fi
+          echo "::notice::API reachable — hosted refresh may be possible; wire harvest steps here."
+
+  self-hosted-refresh:
+    if: inputs.runner_type == 'self-hosted'
+    runs-on: [self-hosted, smartplay-hk]
+    steps:
+      - name: Refresh dataset (requires browsebox checkout at ~/browsebox)
+        run: |
+          /home/ubuntu/browsebox/reports/update_smartplay.sh
+          tail -5 /home/ubuntu/browsebox/reports/update_smartplay.log
