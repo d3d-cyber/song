@@ -28,6 +28,10 @@ header h1 small{color:var(--mut);font-weight:400;font-size:11.5px;margin-left:6p
 .combo-opt:hover{background:#fff3e8}
 .combo-opt.sel{background:#ffedd9;font-weight:600}
 .combo-opt.none{color:var(--mut);cursor:default}
+.combo-opt .cbx{display:inline-block;width:15px;color:var(--orange);font-weight:700}
+.combo-clear{padding:7px 10px;color:#c62828;cursor:pointer;font-size:12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:2}
+.combo-n{position:absolute;right:22px;top:50%;transform:translateY(-50%);background:var(--orange);color:#fff;border-radius:9px;min-width:17px;height:17px;line-height:17px;text-align:center;font-size:11px;padding:0 4px;cursor:pointer;z-index:2}
+.combo-n:hover{background:#c14e00}
 
 label.ck{display:flex;align-items:center;gap:5px;font-size:13px;background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:7px 10px;cursor:pointer;user-select:none}
 label.ck input{accent-color:var(--orange);width:15px;height:15px}
@@ -75,6 +79,8 @@ main{max-width:1180px;margin:0 auto;padding:14px}
 footer{color:var(--mut);font-size:11.5px;text-align:center;padding:18px}
 footer a{color:var(--blue)}
 @media(max-width:760px){.cell{min-height:60px}.chip{display:none}.hrow{gap:6px}.combo{min-width:110px}}
+.chip{font-size:10px;line-height:14px}
+.cell{max-height:360px;overflow-y:auto}
 </style>
 </head>
 <body>
@@ -136,27 +142,54 @@ const fmt = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+
 const venueName = a => a.vn ? a.vn+" ("+a.vc+")" : (a.vc || "-");
 const typeName = a => (D.types && D.types[a.ty]) ? D.types[a.ty] : (a.ty || "");
 
-/* ---------- searchable combobox ---------- */
-function combo(hostId, hiddenId, placeholder, onChange){
+/* ---------- searchable combobox (single or multi select) ---------- */
+function combo(hostId, key, placeholder, onChange, multi){
   const host = document.getElementById(hostId);
-  host.innerHTML = `<input type="hidden" id="${hiddenId}" value="">
-    <input class="combo-in" placeholder="${placeholder}" autocomplete="off">
+  host.innerHTML = `<input class="combo-in" placeholder="${placeholder}" autocomplete="off">
     <div class="combo-list"></div>`;
-  const hidden = host.querySelector("input[type=hidden]");
   const input = host.querySelector(".combo-in");
   const list = host.querySelector(".combo-list");
+  const sel = new Set();
   let opts = [];                       // [value, label]
+  let swallow = false;                 // list was rebuilt during this click — don't auto-close
+  function updateN(){
+    let n = host.querySelector(".combo-n");
+    if (sel.size){
+      if (!n){ n = document.createElement("span"); n.className="combo-n"; n.title="點擊清除已選";
+        host.appendChild(n);
+        n.addEventListener("mousedown", e=>e.stopPropagation());
+        n.onclick = (e)=>{ e.stopPropagation(); sel.clear(); updateN(); input.value=""; onChange(); };
+      }
+      n.textContent = sel.size;
+    } else if (n) n.remove();
+  }
   function renderList(q){
     q = (q||"").trim().toLowerCase();
     const match = opts.filter(([v,l]) => !q || l.toLowerCase().includes(q) || v.toLowerCase().includes(q));
-    list.innerHTML = match.slice(0,400).map(([v,l]) =>
-      `<div class="combo-opt${v===hidden.value?" sel":""}" data-v="${esc(v)}">${esc(l)}</div>`).join("")
+    list.innerHTML = (multi && sel.size ? `<div class="combo-clear">✕ 清除已選 (${sel.size})</div>` : "")
+      + match.map(([v,l]) =>
+        `<div class="combo-opt${sel.has(v)?" sel":""}" data-v="${esc(v)}">${multi?`<span class="cbx">${sel.has(v)?"✓":""}</span>`:""}${esc(l)}</div>`).join("")
       + (match.length===0 ? '<div class="combo-opt none">沒有符合</div>' : "");
     list.classList.add("open");
     list.querySelectorAll(".combo-opt[data-v]").forEach(o=>{
-      o.onclick = ()=>{ hidden.value = o.dataset.v; input.value = o.textContent;
-        list.classList.remove("open"); onChange(); };
+      o.onclick = ()=>{
+        const v = o.dataset.v;
+        swallow = true;
+        if (multi){
+          if (sel.has(v)) sel.delete(v); else sel.add(v);
+          o.classList.toggle("sel", sel.has(v));
+          const x = o.querySelector(".cbx"); if (x) x.textContent = sel.has(v)?"✓":"";
+          updateN(); onChange();
+          if (!sel.size) input.value = "";
+          renderList("");                       // keep list open for more picks
+        } else {
+          sel.clear(); sel.add(v); input.value = o.textContent;
+          list.classList.remove("open"); updateN(); onChange();
+        }
+      };
     });
+    const clr = list.querySelector(".combo-clear");
+    if (clr) clr.onclick = ()=>{ swallow = true; sel.clear(); updateN(); input.value=""; renderList(""); onChange(); };
   }
   input.addEventListener("focus", ()=>renderList(input.value));
   input.addEventListener("input", ()=>renderList(input.value));
@@ -164,60 +197,65 @@ function combo(hostId, hiddenId, placeholder, onChange){
     if (e.key==="Enter"){ const f=list.querySelector(".combo-opt[data-v]"); if(f){f.click();} e.preventDefault(); }
     if (e.key==="Escape"){ list.classList.remove("open"); }
   });
-  document.addEventListener("click", e=>{ if(!host.contains(e.target)) list.classList.remove("open"); });
+  list.addEventListener("mousedown", e=>e.preventDefault());   /* keep focus while picking options */
+  document.addEventListener("click", e=>{
+    if (swallow){ swallow = false; return; }          // click came from a list option
+    if(!host.contains(e.target)){ list.classList.remove("open"); }
+  });
   return {
     setOptions(o){ opts = o; },                     // [[value,label]]
-    set(v){ const f = opts.find(o=>o[0]===v); hidden.value = v||""; input.value = f?f[1]:""; },
-    get(){ return hidden.value; },
-    clear(){ hidden.value=""; input.value=""; },
+    set(v){ sel.clear(); if (v){ sel.add(v); input.value = (opts.find(o=>o[0]===v)||[""])[1]||""; } else input.value=""; updateN(); },
+    get(){ return sel.size ? [...sel][0] : ""; },   /* single-select use */
+    has(v){ return sel.has(v); },
+    empty(){ return sel.size===0; },
+    clear(){ sel.clear(); input.value=""; updateN(); },
     fire(){ onChange(); }
   };
 }
 
 const CB = {};
-["dist","venue","meth","type","t0","t1"].forEach(k=>{
-  CB[k] = combo("c-"+k, "f-"+k, {dist:"全部地區",venue:"全部場館（可搜尋）",meth:"全部報名方式",
-                                 type:"全部活動類型",t0:"06:00",t1:"22:30"}[k], render);
+["dist","venue","meth","type"].forEach(k=>{
+  CB[k] = combo("c-"+k, "f-"+k, {dist:"全部地區（可多選）",venue:"全部場館（可搜尋·多選）",meth:"全部報名方式（可多選）",
+                                 type:"全部活動類型（可多選）"}[k], render, true);
+});
+["t0","t1"].forEach(k=>{
+  CB[k] = combo("c-"+k, "f-"+k, {t0:"06:00",t1:"22:30"}[k], render, false);
 });
 CB.t0.setOptions([...(function(){const a=[];for(let t=360;t<=1350;t+=30)a.push([String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"),1]);return a})()].map(x=>x[0]).map(v=>[v,v]));
 CB.t1.setOptions(CB.t0 === null ? [] : [...(function(){const a=[];for(let t=360;t<=1350;t+=30)a.push([String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"),1]);return a})()].map(x=>x[0]).map(v=>[v,v]));
 CB.t0.set("06:00"); CB.t1.set("22:30");
-CB.meth.setOptions([["","全部報名方式"],["FCFS","先到先得"],["BALLOT","抽籤"],["WALKIN","即場報名"]].slice(1));
-CB.dist.setOptions([["","全部地區"]]);
+CB.meth.setOptions([["FCFS","先到先得"],["BALLOT","抽籤"],["WALKIN","即場報名"]]);
 
-/* district options */
+/* district options — all */
 (function(){
   const groups = {};
   DATA.forEach(a=>{if(a.dist && !(a.dist in groups)) groups[a.dist]=1});
   const order = ["中西區","東區","南區","灣仔區","九龍城區","觀塘區","深水埗區","黃大仙區","油尖旺區",
                  "北區","西貢區","沙田區","大埔區","離島區","葵青區","荃灣區","屯門區","元朗區"];
-  const o = [["","全部地區"]];
+  const o = [];
   order.forEach(d=>{if(groups[d])o.push([d,d])});
   Object.keys(groups).forEach(d=>{ if(!order.includes(d)) o.push([d,d]) });
   CB.dist.setOptions(o);
 })();
-/* venue options (respect district, searchable) */
-function venueOptions(){
-  const dist = CB.dist.get();
+/* venue options — ALL venues, always, labelled with district */
+(function(){
   const m = new Map();
   DATA.forEach(a=>{
-    if (dist && a.dist!==dist) return;
-    if (!a.vc) return;
-    const lbl = a.vn ? a.vn+" ("+a.vc+")" : a.vc;
-    if (!m.has(a.vc)) m.set(a.vc, lbl);
+    if (!a.vc || m.has(a.vc)) return;
+    const lbl = (a.dist ? a.dist+" · " : "") + (a.vn ? a.vn+" ("+a.vc+")" : a.vc);
+    m.set(a.vc, lbl);
   });
-  const o = [["","全部場館（可搜尋）"]];
-  [...m.entries()].sort((x,y)=>{
+  const o = [...m.entries()].sort((x,y)=>{
     const px = x[1].includes(" (")?0:1, py = y[1].includes(" (")?0:1;
     return px-py || x[1].localeCompare(y[1],"zh-hk");
-  }).forEach(([v,l])=>o.push([v,l]));
+  });
   CB.venue.setOptions(o);
-}
-/* type options */
+})();
+/* type options — every LCSD activity type */
 (function(){
   const present = new Set(DATA.map(a=>a.ty).filter(Boolean));
-  const o = [["","全部活動類型"]];
-  Object.keys(D.types||{}).forEach(c=>{ if(present.has(c)) o.push([c, (D.types[c]||c)+" ("+c+")"]) });
+  const o = [];
+  Object.keys(D.types||{}).forEach(c=>{ o.push([c, (D.types[c]||c)+" ("+c+")"+(present.has(c)?"":" ·暫無")]) });
   present.forEach(c=>{ if(!(D.types||{})[c]) o.push([c,c]) });
   CB.type.setOptions(o);
 })();
@@ -263,12 +301,11 @@ document.querySelectorAll("#vtab .tab").forEach(b=>{
 
 /* ---------- matching ---------- */
 function passes(a){
-  const q = $("#q").value.trim().toLowerCase(), d = CB.dist.get(), v = CB.venue.get(),
-        m = CB.meth.get(), ty = CB.type.get();
-  if (d && a.dist!==d) return false;
-  if (v && a.vc!==v) return false;
-  if (m && a.m!==m) return false;
-  if (ty && a.ty!==ty) return false;
+  const q = $("#q").value.trim().toLowerCase();
+  if (!CB.dist.empty() && !CB.dist.has(a.dist)) return false;    // multi: any of selected
+  if (!CB.venue.empty() && !CB.venue.has(a.vc)) return false;
+  if (!CB.meth.empty() && !CB.meth.has(a.m)) return false;
+  if (!CB.type.empty() && !CB.type.has(a.ty)) return false;
   if (q){
     const hay = (a.tc+" "+a.en+" "+a.no+" "+(a.vn||"")+" "+a.vc+" "+typeName(a)+" "+(a.ins||[]).join(" ")).toLowerCase();
     if (!hay.includes(q)) return false;
@@ -333,7 +370,7 @@ function renderTabs(){
   });
 }
 function render(){
-  renderTabs(); venueOptions();
+  renderTabs();
   const F = DATA.filter(passes);
   $("#stamp").textContent = "資料更新：" + (D.updated||"") + " · 共 " + DATA.length + " 項活動";
   const bal = DATA.filter(a=>a.m==="BALLOT" && a.fsd && a.fsd >= TODAY);
@@ -373,9 +410,8 @@ function renderCal(F){
     const list = out[d];
     const ds = `${view.y}-${String(view.m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
     const dayWd = new Date(view.y,view.m-1,d).getDay();
-    let chips = list.slice(0,4).map(a=>
+    const chips = list.map(a=>
       `<span class="chip${a.ql<=0&&a.fq<=0?" full":""}" style="background:${a.ql>0?"var(--green)":a.fq>0?"var(--teal)":"var(--grey)"}" title="${esc(a.tc)}">${esc(a.tc)}</span>`).join("");
-    if (list.length>4) chips += `<span class="more">+${list.length-4} 更多</span>`;
     html += `<div class="cell${ds===today?" today":""}${selDay===d?" sel":""}${wds.size&&!wds.has(dayWd)?" dim":""}" data-d="${d}">
                <span class="dnum">${d}</span>${chips}</div>`;
   }
@@ -400,10 +436,9 @@ function renderDay(d, F){
 }
 function renderList(F){
   const s = F.slice().sort((a,b)=>a.sd.localeCompare(b.sd)||(a.st||"").localeCompare(b.st||""));
-  const cap = s.slice(0,300);
-  $("#meta").textContent = `清單 — 共 ${s.length} 項符合${s.length>300?"（顯示首300）":""}，按開始日期排序`;
-  $("#view-list").innerHTML = cap.length
-    ? `<div class="cards">${cap.map(card).join("")}</div>`
+  $("#meta").textContent = `清單 — 共 ${s.length} 項符合，按開始日期排序（全部顯示）`;
+  $("#view-list").innerHTML = s.length
+    ? `<div class="cards">${s.map(card).join("")}</div>`
     : '<div class="empty">沒有符合的活動 — 試試放寬篩選</div>';
 }
 function card(a){
