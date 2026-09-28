@@ -95,6 +95,7 @@ footer a{color:var(--blue)}
   <div class="meta">
     <span id="meta"></span>
     <span id="stamp"></span>
+    <span id="cycle" style="color:var(--orange);font-weight:600"></span>
   </div>
   <div id="view-cal">
     <div class="cal">
@@ -249,6 +250,14 @@ function render(){
   renderTabs(); venueOptions();
   const F = DATA.filter(passes);
   $("#stamp").textContent = "資料更新：" + (D.updated||"") + " · 共 " + DATA.length + " 項活動";
+  const bal = DATA.filter(a=>a.m==="BALLOT" && a.fsd && a.fsd >= TODAY);
+  if (bal.length){
+    const cnt = {};
+    bal.forEach(a=>{const k=a.esd+" → "+a.eed+"|"+a.fsd; cnt[k]=(cnt[k]||0)+1});
+    const best = Object.entries(cnt).sort((x,y)=>y[1]-x[1])[0][0].split("|");
+    $("#cycle").textContent = "本期抽籤班報名 " + best[0] + " · 繳費確認自 " + best[1] +
+      " 起 — 未繳費名額屆時釋出（先到先得）";
+  } else { $("#cycle").textContent = ""; }
   $("#view-cal").style.display = listView ? "none" : "block";
   $("#view-list").style.display = listView ? "block" : "none";
   if (listView) renderList(F); else renderCal(F);
