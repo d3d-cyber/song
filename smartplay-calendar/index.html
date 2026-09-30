@@ -122,7 +122,7 @@ footer{color:var(--mut);font-size:11.5px;text-align:center;padding:18px}
     <div class="combo" id="c-t0" style="min-width:92px"></div>
     <span class="lbl" style="font-size:12.5px;color:#888">至</span>
     <div class="combo" id="c-t1" style="min-width:92px"></div>
-    <div class="wd" id="wd"></div>
+    <div class="wd" id="wd" title="只顯示整個時間表完全在所選日子內的活動"></div>
     <label class="ck"><input type="checkbox" id="notstarted">只顯示未開始</label>
     <label class="ck"><input type="checkbox" id="seats">只顯示有位</label>
   </div>
@@ -339,10 +339,16 @@ function passes(a){
   if ($("#seats").checked && !((a.ql>0) || (a.fq>0))) return false;
   const wds = selWeekdays();
   if (wds.size){
-    let hit = false;
-    if (a.wk.length) a.wk.forEach(w=>{ if (WK[w]!==undefined && wds.has(WK[w])) hit = true; });
-    else { const wd = new Date(a.sd+"T00:00:00").getDay(); if (wds.has(wd)) hit = true; }
-    if (!hit) return false;
+    // STRICT: the activity's WHOLE weekly schedule must fit inside the
+    // selected days — e.g. pick 一 → only Monday-only activities;
+    // pick 一+五 → only activities running solely on Mondays and Fridays.
+    let days;
+    if (a.wk && a.wk.length) days = new Set(a.wk.map(w=>WK[w]).filter(x=>x!==undefined));
+    else days = new Set([new Date(a.sd+"T00:00:00").getDay()]);   // single-date activity
+    if (!days.size) return false;
+    let inSel = false;
+    for (const d of days){ if (!wds.has(d)) return false; inSel = true; }
+    if (!inSel) return false;
   }
   return true;
 }
@@ -438,7 +444,8 @@ function renderCal(F){
     }
   }
   const cnt = new Set(); Object.values(out).forEach(v=>v.forEach(a=>cnt.add(a.no+a.sd)));
-  $("#meta").textContent = `顯示 ${view.y}年${view.m}月 — ${cnt.size} 項活動、${Object.values(out).reduce((s,v)=>s+v.length,0)} 個活動日（點日期看詳情）`;
+  const strict = wds.size ? " · 整個時間表在所選日子內" : "";
+  $("#meta").textContent = `顯示 ${view.y}年${view.m}月 — ${cnt.size} 項活動、${Object.values(out).reduce((s,v)=>s+v.length,0)} 個活動日（點日期看詳情）${strict}`;
   const lead = (first.getDay()+6)%7;
   const today = fmt(new Date());
   let html = "";
