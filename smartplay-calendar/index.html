@@ -73,6 +73,8 @@ main{max-width:1180px;margin:0 auto;padding:14px}
 .badge{display:inline-block;border-radius:4px;padding:1px 7px;font-size:11.5px;color:#fff;margin-right:4px}
 .b-ok{background:var(--green)}.b-fc{background:var(--blue)}.b-full{background:var(--grey)}
 .b-teal{background:var(--teal)}.b-hot{background:var(--orange)}.b-dim{background:#b9b4a7}
+.star{float:right;cursor:pointer;font-size:19px;color:#f0a500;margin-left:8px;line-height:1;user-select:none}
+.star.off{color:#c9c4b8}
 .fee{float:right;color:var(--orange);font-weight:700;font-size:15px}
 .seatline{margin-top:5px;font-size:12.5px}
 .empty{padding:40px;text-align:center;color:var(--mut)}
@@ -130,6 +132,7 @@ footer{color:var(--mut);font-size:11.5px;text-align:center;padding:18px}
     <div class="tabs" id="vtab">
       <button class="tab on" data-v="cal">月曆</button>
       <button class="tab" data-v="list">清單</button>
+      <button class="tab" data-v="mine">我的 ★<span id="minecount"></span></button>
     </div>
     <div class="tabs" id="tabs"></div>
     <button id="reset">重設</button>
@@ -150,6 +153,7 @@ footer{color:var(--mut);font-size:11.5px;text-align:center;padding:18px}
     <div id="daylist"></div>
   </div>
   <div id="view-list" style="display:none"></div>
+  <div id="view-mine" style="display:none"></div>
 </main>
 <footer>資料來源：SmartPLAY (lcsd.gov.hk) 公開搜尋 · 未登入擷取 · 報名前請以<a href="https://www.smartplay.lcsd.gov.hk" target="_blank">官方網站</a>為準</footer>
 <script src="data.js"></script>
@@ -157,7 +161,9 @@ footer{color:var(--mut);font-size:11.5px;text-align:center;padding:18px}
 const D = window.SP_DATA, DATA = D.acts, TODAY = D.today;
 const WK = {MON:1,TUE:2,WED:3,THU:4,FRI:5,SAT:6,SUN:0};
 const WD = "日一二三四五六";
-let view = {y:2026,m:9}, selDay = null, listView = false;
+let view = {y:2026,m:9}, selDay = null, mode = "cal";
+let CHOSEN = new Set();
+try { CHOSEN = new Set(JSON.parse(localStorage.getItem("sp_chosen")||"[]")); } catch(e){}
 
 const $ = s => document.querySelector(s);
 const esc = s => (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -318,8 +324,17 @@ $("#reset").onclick = ()=>{
 document.querySelectorAll("#vtab .tab").forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll("#vtab .tab").forEach(x=>x.classList.remove("on"));
-    b.classList.add("on"); listView = b.dataset.v==="list"; render();
+    b.classList.add("on"); mode = b.dataset.v; selDay=null; render();
   };
+});
+/* star toggles (event delegation: works in every view) */
+document.addEventListener("click", e=>{
+  const s = e.target.closest(".star");
+  if (!s) return;
+  e.stopPropagation();
+  const no = s.dataset.no;
+  if (CHOSEN.has(no)) CHOSEN.delete(no); else CHOSEN.add(no);
+  saveChosen(); render();
 });
 
 /* ---------- matching ---------- */
@@ -397,6 +412,10 @@ function renderTabs(){
     b.textContent = `${y}年${m}月`;
     b.onclick = ()=>{view={y,m};selDay=null;render()}; tabs.appendChild(b);
   });
+  const mc = $("#minecount");
+  mc.textContent = CHOSEN.size ? CHOSEN.size : "";
+  mc.style.display = CHOSEN.size ? "inline-block" : "none";
+  mc.style.cssText = "background:#f0a500;color:#fff;border-radius:8px;font-size:10px;padding:0 5px;margin-left:4px;vertical-align:2px;display:"+(CHOSEN.size?"inline-block":"none");
 }
 function updateFCount(){
   let n = 0;
@@ -423,9 +442,10 @@ function render(){
     $("#cycle").textContent = "本期抽籤班報名 " + best[0] + " · 繳費確認自 " + best[1] +
       " 起 — 未繳費名額屆時釋出（先到先得）";
   } else { $("#cycle").textContent = ""; }
-  $("#view-cal").style.display = listView ? "none" : "block";
-  $("#view-list").style.display = listView ? "block" : "none";
-  if (listView) renderList(F); else renderCal(F);
+  $("#view-cal").style.display = mode==="cal" ? "block" : "none";
+  $("#view-list").style.display = mode==="list" ? "block" : "none";
+  $("#view-mine").style.display = mode==="mine" ? "block" : "none";
+  if (mode==="cal") renderCal(F); else if (mode==="list") renderList(F); else renderMine();
   updateFCount();
 }
 function renderCal(F){
@@ -478,6 +498,63 @@ function renderDay(d, F){
   box.innerHTML = `<div class="daytitle">${view.y}年${view.m}月${d}日 (星期${wd}) — ${list.length} 項活動${hint}</div>`+
     (list.length?`<div class="cards">${list.map(card).join("")}</div>`:'<div class="empty">沒有活動</div>');
 }
+/* ---------- my chosen activities (★) ---------- */
+function saveChosen(){ try{ localStorage.setItem("sp_chosen", JSON.stringify([...CHOSEN])); }catch(e){} }
+function renderMine(){
+  const acts = DATA.filter(a=>CHOSEN.has(a.no));
+  const s = acts.slice().sort((a,b)=>a.sd.localeCompare(b.sd)||(a.st||"").localeCompare(b.st||""));
+  let html = `<div class="daytitle">我的活動 — 已選 ${s.length} 項（月曆只顯示這些活動的日期）</div>`;
+  html += s.length
+    ? `<div class="cards">${s.map(card).join("")}</div>`
+    : '<div class="empty">尚未選擇活動 — 在清單或日期詳情點卡片右上角的 ☆ 加入</div>';
+  if (s.length){
+    html += `<div class="daytitle">${view.y}年${view.m}月 — 已選活動日期（點日期看當日詳情）</div>
+      <div class="cal">
+        <div class="calhead"><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div></div>
+        <div class="grid" id="mgrid"></div>
+      </div>
+      <div id="mineDay"></div>`;
+  }
+  $("#view-mine").innerHTML = html;
+  if (s.length) buildMineGrid(s);
+}
+function buildMineGrid(acts){
+  const first = new Date(view.y,view.m-1,1), last = new Date(view.y,view.m,0);
+  const out = {}; for (let d=1; d<=last.getDate(); d++) out[d]=[];
+  for (const a of acts){
+    const st = new Date(a.sd+"T00:00:00"), en = new Date(a.ed+"T00:00:00");
+    if (en < first || st > last) continue;
+    for (let d=1; d<=last.getDate(); d++){
+      const day = new Date(view.y,view.m-1,d);
+      if (covers(a,day)) out[d].push(a);
+    }
+  }
+  const lead = (first.getDay()+6)%7, today = fmt(new Date());
+  let html = "";
+  for (let i=0;i<lead;i++) html += '<div class="cell blank"></div>';
+  for (let d=1; d<=last.getDate(); d++){
+    const list = out[d];
+    const ds = `${view.y}-${String(view.m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    const chips = list.map(a=>
+      `<span class="chip${a.ql<=0&&a.fq<=0?" full":""}" style="background:${a.ql>0?"var(--green)":a.fq>0?"var(--teal)":"var(--grey)"}" title="${esc(a.tc)}">${esc(a.tc)}</span>`).join("");
+    html += `<div class="cell${ds===today?" today":""}${selDay===d?" sel":""}" data-md="${d}">
+               <span class="dnum">${d}</span>${chips}</div>`;
+  }
+  $("#mgrid").innerHTML = html;
+  document.querySelectorAll(".cell[data-md]").forEach(el=>{
+    el.onclick = ()=>{ selDay=+el.dataset.md; buildMineGrid(acts); renderMineDay(selDay, acts);
+      $("#mineDay").scrollIntoView({behavior:"smooth",block:"nearest"}); };
+  });
+  if (selDay) renderMineDay(selDay, acts);
+}
+function renderMineDay(d, acts){
+  const box = $("#mineDay");
+  if (!d){box.innerHTML="";return}
+  const day = new Date(view.y,view.m-1,d);
+  const list = acts.filter(a=>covers(a,day)).sort((a,b)=>(a.st||"").localeCompare(b.st||""));
+  box.innerHTML = `<div class="daytitle">${view.y}年${view.m}月${d}日 (星期${WD[day.getDay()]}) — ${list.length} 項已選活動</div>`+
+    (list.length?`<div class="cards">${list.map(card).join("")}</div>`:'<div class="empty">當日沒有已選活動</div>');
+}
 function renderList(F){
   const s = F.slice().sort((a,b)=>a.sd.localeCompare(b.sd)||(a.st||"").localeCompare(b.st||""));
   $("#meta").textContent = `清單 — 共 ${s.length} 項符合，按開始日期排序（全部顯示）`;
@@ -492,7 +569,7 @@ function card(a){
              : a.m==="WALKIN" ? '<span class="badge b-dim">即場</span>' : "";
   const p = phase(a);
   return `<div class="card">
-    <span class="fee">${a.fee==null||a.fee===0?"免費":"$"+a.fee}</span>
+    <span class="star${CHOSEN.has(a.no)?"":" off"}" data-no="${a.no}" title="加入/移除我的活動">${CHOSEN.has(a.no)?"★":"☆"}</span><span class="fee">${a.fee==null||a.fee===0?"免費":"$"+a.fee}</span>
     <h3>${esc(a.tc)}</h3><div class="en">${esc(a.en)}</div>
     <div class="row">${meth}${seatBadge(a)}${enrolBadges(a)}<span class="badge b-dim">${esc(typeName(a))}</span></div>
     <div class="row"><b>${esc(a.no)}</b></div>
